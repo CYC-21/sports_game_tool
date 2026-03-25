@@ -2320,7 +2320,7 @@ function renderAbout() {
       '<p>如前所述，這畢竟是個鼓勵出門看比賽的小工具，因此是以「場地」為核心製作的。不只可以看到附近場館的賽事，也會有場館周邊的行程推薦。</p>' +
       '<p>因為這是個人籌備的小小工具，資料還滿少的，因此邀請各位一起加入資料建置。目前還只收錄「木蘭聯賽」，但歡迎其他層級、其他運動、其他聯盟的賽事，包含國際賽的投稿。不過畢竟設計時只針對單一聯賽，當資料越來越龐大時，前端的呈現方式也還得思考。當然，這不是現在的首要問題。</p>' +
       '<p>你可以透過「投稿」的方式新增賽事、景點等等資料。我也將程式碼放在 <a href="https://github.com/johnnyhsu/out-to-watch-ball">GitHub</a> 上並使用 <a href="https://choosealicense.com/licenses/gpl-3.0/">GPL-3.0</a> 授權，歡迎你取用，並改成更好用的樣子。</p>' +
-      '<p>我不是設計師，更沒有軟體背景，這個純詠唱完成的頁面勢必有所缺漏、不一定好用，請多多包涵。我也是有可能哪天看他不順眼，大改一波。目前會一邊增加資料庫，一邊改一些前端令人齷齪（ak-tsak）的版面。有機會的話，也希望把球隊和球員的基本資料補上，前提是有時間的話🫣</p>' +
+      '<p>我不是設計師，更沒有軟體背景，這個純詠唱完成的頁面勢必有所缺漏、不一定好用，請多多包涵。我也是有可能哪天看他不順眼，大改一波。有機會的話，也希望把球隊和球員的基本資料補上，前提是有時間的話🫣</p>' +
       '<p>最後，希望各位都能開心看球，也希望選手們感受到球迷們的愛✨</p>' +
       '</section>'
   );
@@ -2425,12 +2425,28 @@ function initSubmitHandlersOnce() {
     return;
   }
   host.dataset.submitWired = '1';
+
+  async function refreshPlacesAfterSubmit_() {
+    try {
+      var places = await loadPlaces();
+      state.places = enrichPlacesWithTypeLabels(places, state.placeTypes);
+      // 若正在場館頁，附近景點清單也一併更新
+      var r = parseHash();
+      if (r && r.parts && r.parts[0] === 'venues' && r.parts[1]) {
+        renderVenueDetail(decodeURIComponent(r.parts[1]));
+      }
+    } catch (e) {
+      // ignore (保持現狀)
+    }
+  }
+
   host.addEventListener('submit', function (ev) {
     var form = ev.target;
     if (!form || (form.id !== 'pending-form' && form.id !== 'places-form')) {
       return;
     }
     if (form.id === 'places-form') {
+      form.setAttribute('target', 'gp_submit_target');
       var mapEl = form.querySelector('input[name="map_url"]');
       var entered = normalizePlaceMapUrlForDupWarn_(mapEl && mapEl.value);
       if (entered) {
@@ -2478,7 +2494,7 @@ function initSubmitHandlersOnce() {
     var form = fid ? document.getElementById(fid) : null;
     if (st) {
       if (fid === 'places-form') {
-        st.textContent = '已送出。景點會在資料更新後出現在清單中；若剛剛的結果頁顯示失敗，請稍後再試或換一則地圖連結。';
+        st.textContent = '已送出，正在更新景點資料…';
       } else {
         st.textContent = '已送出，感謝提供。我們會審核後再上架；若結果頁顯示失敗，請稍後再試。';
       }
@@ -2490,6 +2506,14 @@ function initSubmitHandlersOnce() {
       if (btn) {
         btn.disabled = false;
       }
+    }
+    if (fid === 'places-form') {
+      refreshPlacesAfterSubmit_().then(function () {
+        var st2 = document.getElementById('submit-status');
+        if (st2 && st2.className === 'ok') {
+          st2.textContent = '已送出。若未立刻看到新增，請稍候或重新整理。';
+        }
+      });
     }
   });
 }
