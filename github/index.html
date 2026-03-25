@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="依地區、球場與時間瀏覽木蘭聯賽賽事資訊，查看場館位置、附近景點，並開放賽事與景點投稿。"
+    />
+    <meta property="og:title" content="出門看球！觀賽行程規劃小幫手" />
+    <meta
+      property="og:description"
+      content="依地區、球場與時間瀏覽木蘭聯賽賽事資訊，查看場館位置、附近景點，並開放賽事與景點投稿。"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://cyc-21.github.io/sports_game_tool/" />
+    <title>出門看球！觀賽行程規劃小幫手</title>
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Noto+Sans+TC:wght@100..900&family=TASA+Explorer:wght@400..800&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
+    />
+    <link rel="stylesheet" href="./css/fonts.css" />
+    <link rel="stylesheet" href="./css/app.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="top-header">
+        <div class="brand">
+          <p class="brand-title">
+            <a href="#/" class="brand-title-link">出門看球！</a>
+          </p>
+        </div>
+        <div class="header-actions">
+          <a href="#/guide" class="link-btn link-btn--icon link-btn--subtle" id="nav-guide"
+            ><span class="material-symbols-outlined link-btn__icon" aria-hidden="true"
+              >help</span
+            ><span class="link-btn__text">使用說明</span></a
+          >
+          <a href="#/about" class="link-btn link-btn--icon link-btn--subtle" id="nav-about"
+            ><span class="material-symbols-outlined link-btn__icon" aria-hidden="true"
+              >info</span
+            ><span class="link-btn__text">關於</span></a
+          >
+          <a href="#/submit" class="link-btn link-btn--icon" id="nav-submit"
+            ><span class="material-symbols-outlined link-btn__icon" aria-hidden="true"
+              >edit_note</span
+            ><span class="link-btn__text">投稿</span></a
+          >
+        </div>
+      </header>
+
+      <div class="view" data-view="explore" id="view-explore">
+        <div class="filter-panel is-collapsed" id="filter-panel">
+          <button
+            type="button"
+            class="filter-panel__toggle"
+            id="filter-panel-toggle"
+            aria-expanded="false"
+            aria-controls="filter-panel-body"
+          >
+            <span class="filter-panel__toggle-label">
+              <span class="material-symbols-outlined filter-panel__toggle-icon" aria-hidden="true"
+                >tune</span
+              >
+              篩選條件
+            </span>
+            <span
+              class="material-symbols-outlined filter-panel__chevron"
+              aria-hidden="true"
+              >expand_more</span
+            >
+          </button>
+          <div
+            id="filter-panel-body"
+            class="filter-panel__body"
+            role="region"
+            aria-label="篩選條件"
+          >
+            <div class="filter-bar">
+              <label class="filter-item">
+                <span class="material-symbols-outlined filter-icon" aria-hidden="true"
+                  >location_on</span
+                >
+                <select id="city-select" aria-label="地區"></select>
+              </label>
+              <label class="filter-item">
+                <span class="material-symbols-outlined filter-icon" aria-hidden="true"
+                  >sports_soccer</span
+                >
+                <select id="sport-select" aria-label="運動"></select>
+              </label>
+          <label class="filter-item">
+            <span class="material-symbols-outlined filter-icon" aria-hidden="true">stadium</span>
+            <select id="venue-select" aria-label="球場"></select>
+          </label>
+          <label class="filter-item">
+            <span class="material-symbols-outlined filter-icon" aria-hidden="true"
+              >emoji_events</span
+            >
+            <select id="league-select" aria-label="聯盟"></select>
+          </label>
+          <label class="filter-item">
+            <span class="material-symbols-outlined filter-icon" aria-hidden="true"
+              >calendar_month</span
+            >
+            <select id="filter-year" aria-label="年份"></select>
+          </label>
+          <label class="filter-item">
+            <span class="material-symbols-outlined filter-icon" aria-hidden="true"
+              >calendar_view_month</span
+            >
+            <select id="filter-month" aria-label="月份"></select>
+          </label>
+          <label class="filter-item">
+            <span class="material-symbols-outlined filter-icon" aria-hidden="true"
+              >trophy</span
+            >
+            <select id="filter-season" aria-label="賽季"></select>
+          </label>
+          <label class="filter-item">
+            <span class="material-symbols-outlined filter-icon" aria-hidden="true"
+              >hourglass_top</span
+            >
+            <select id="filter-status" aria-label="狀態"></select>
+          </label>
+          <label class="filter-item filter-grow">
+            <span class="material-symbols-outlined filter-icon" aria-hidden="true">groups</span>
+            <input
+              type="search"
+              id="team-filter"
+              placeholder="搜尋隊名或標題…"
+              autocomplete="off"
+            />
+          </label>
+            </div>
+          </div>
+        </div>
+
+        <p id="match-source-note" class="source-note" aria-live="polite"></p>
+
+        <div class="mode-switch" role="tablist" aria-label="檢視模式">
+          <button type="button" class="mode-btn active" data-mode="location">
+            <span class="material-symbols-outlined mode-btn__icon" aria-hidden="true"
+              >location_city</span
+            ><span>地點</span>
+          </button>
+          <button type="button" class="mode-btn" data-mode="nearby">
+            <span class="material-symbols-outlined mode-btn__icon" aria-hidden="true"
+              >my_location</span
+            ><span>附近</span>
+          </button>
+          <button type="button" class="mode-btn" data-mode="timeline">
+            <span class="material-symbols-outlined mode-btn__icon" aria-hidden="true"
+              >schedule</span
+            ><span>時間</span>
+          </button>
+        </div>
+
+        <main class="explore-main" id="explore-content"></main>
+      </div>
+
+      <div class="view" data-view="match" id="view-match" hidden></div>
+      <div class="view" data-view="venue" id="view-venue" hidden></div>
+      <div class="view" data-view="submit" id="view-submit" hidden></div>
+      <div class="view" data-view="guide" id="view-guide" hidden></div>
+      <div class="view" data-view="about" id="view-about" hidden></div>
+
+      <iframe
+        class="submit-iframe"
+        name="gp_submit_target"
+        id="gp_submit_target"
+        title="表單送出結果"
+      ></iframe>
+    </div>
+
+    <script type="module" src="./js/app.js"></script>
+  </body>
+</html>
