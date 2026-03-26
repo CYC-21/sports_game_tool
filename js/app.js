@@ -344,12 +344,7 @@ function venueLatLng(v) {
   if (!v) {
     return null;
   }
-  var lat = parseFloat(v.lat);
-  var lng = parseFloat(v.lng);
-  if (isNaN(lat) || isNaN(lng)) {
-    return null;
-  }
-  return { lat: lat, lng: lng };
+  return latLngFromRow_(v.lat, v.lng);
 }
 
 function venueMapOpenUrl(v) {
@@ -1027,6 +1022,61 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
+/** 台灣本島／常用範圍粗判（用於過濾明顯錯誤座標） */
+var TW_ROUGH_BOUNDS = { latMin: 21.7, latMax: 26.5, lngMin: 118.2, lngMax: 123.8 };
+
+function pointInRoughTaiwan_(ll) {
+  if (!ll) {
+    return false;
+  }
+  return (
+    ll.lat >= TW_ROUGH_BOUNDS.latMin &&
+    ll.lat <= TW_ROUGH_BOUNDS.latMax &&
+    ll.lng >= TW_ROUGH_BOUNDS.lngMin &&
+    ll.lng <= TW_ROUGH_BOUNDS.lngMax
+  );
+}
+
+/**
+ * 從試算表 lat/lng 欄位還原 WGS84；修正常見「經緯對調」、忽略 (0,0)。
+ */
+function latLngFromRow_(latRaw, lngRaw) {
+  var a = parseFloat(latRaw);
+  var b = parseFloat(lngRaw);
+  if (isNaN(a) || isNaN(b)) {
+    return null;
+  }
+  if (Math.abs(a) < 1e-9 && Math.abs(b) < 1e-9) {
+    return null;
+  }
+  if (a >= -90 && a <= 90 && b >= -180 && b <= 180) {
+    return { lat: a, lng: b };
+  }
+  if (b >= -90 && b <= 90 && a >= -180 && a <= 180) {
+    return { lat: b, lng: a };
+  }
+  return null;
+}
+
+/**
+ * 場館—景點直線距離；若「同城」卻出現離譜公里數（多為欄位錯／海外座標），改為不顯示數字以免誤導。
+ */
+function placeDistanceKmFromVenue_(venueCity, placeCity, venuePt, placePt) {
+  if (!venuePt || !placePt) {
+    return null;
+  }
+  var km = haversineKm(venuePt.lat, venuePt.lng, placePt.lat, placePt.lng);
+  if (
+    km > 500 &&
+    venuePlaceSameCityNormalized(venueCity, placeCity) &&
+    pointInRoughTaiwan_(venuePt) &&
+    !pointInRoughTaiwan_(placePt)
+  ) {
+    return null;
+  }
+  return km;
+}
+
 function renderHeaderCities() {
   var sel = $('#city-select');
   if (!sel) {
@@ -1458,7 +1508,11 @@ function placeSubmitTypeFieldHtml() {
         return null;
       }
       var lab = placeSubmitTypeRowLabel(r) || id;
-      var iconName = placeTypeToMaterialIcon(lab + ' ' + id);
+      // 先用穩定代碼 id 對應；未命中再回退到顯示 label（避免 "海邊 swim" 這類拼接字串誤判）
+      var iconName = placeTypeToMaterialIcon(id);
+      if (iconName === 'place') {
+        iconName = placeTypeToMaterialIcon(lab);
+      }
       return { id: id, lab: lab, iconName: iconName };
     })
     .filter(Boolean)
@@ -1713,15 +1767,11 @@ function renderNearbyView(container) {
   var withDist = [];
   list.forEach(function (m) {
     var v = venueById(m.venue_id);
-    if (!v || v.lat === '' || v.lng === '' || v.lat == null || v.lng == null) {
+    var vll = latLngFromRow_(v && v.lat, v && v.lng);
+    if (!v || !vll) {
       return;
     }
-    var lat = parseFloat(v.lat);
-    var lng = parseFloat(v.lng);
-    if (isNaN(lat) || isNaN(lng)) {
-      return;
-    }
-    var km = haversineKm(state.userPos.lat, state.userPos.lng, lat, lng);
+    var km = haversineKm(state.userPos.lat, state.userPos.lng, vll.lat, vll.lng);
     withDist.push({ match: m, km: km, venue: v });
   });
   if (!withDist.length) {
@@ -1839,43 +1889,37 @@ function renderMatchDetail(id) {
       awayNm = '—';
     }
   }
+  var matchupTitle = homeNm + ' vs. ' + awayNm;
   var headerActions = matchDetailHeaderActionsHtml(m, v);
   main.innerHTML =
     '<header class="detail-header detail-header--match">' +
     '<a href="#/" class="back">' +
     msIcon('arrow_back', 'back__icon') +
     '返回</a>' +
-    '<div class="detail-header__title-row">' +
-    '<div class="detail-header__title-stack">' +
-    '<h1>' +
-    escapeHtml(displayMatchTitle(m)) +
+    '</header>' +
+    '<section class="match-detail-overview" aria-label="賽事摘要">' +
+    '<div class="match-detail-overview__main">' +
+    '<h1 class="match-detail-overview__title">' +
+    escapeHtml(matchupTitle) +
     '</h1>' +
-    '<p class="meta-line">' +
+    '</div>' +
+    '<div class="match-detail-overview__bar">' +
+    '<div class="match-detail-overview__meta">' +
+    '<span class="match-detail-overview__meta-item">' +
     escapeHtml(formatTime(m.start_time)) +
-    ' · ' +
+    '</span>' +
+    '<span class="match-detail-overview__meta-item">' +
     escapeHtml(displaySportLabel(m)) +
-    '</p>' +
-    '<p class="status-line"><span class="status-dot ' +
+    '</span>' +
+    '<span class="match-detail-overview__meta-item"><span class="status-dot ' +
     meta.dotClass +
     '"></span>' +
     escapeHtml(meta.label) +
-    '</p></div>' +
-    headerActions +
-    '</div></header>' +
-    '<section class="detail-matchup" aria-label="對戰隊伍">' +
-    '<div class="detail-matchup__col detail-matchup__col--home">' +
-    '<span class="detail-matchup__label">主場</span>' +
-    '<span class="detail-matchup__name">' +
-    escapeHtml(homeNm) +
-    '</span></div>' +
-    '<div class="detail-matchup__mid" aria-hidden="true">' +
-    '<span class="detail-matchup__vs">對</span>' +
+    '</span>' +
     '</div>' +
-    '<div class="detail-matchup__col detail-matchup__col--away">' +
-    '<span class="detail-matchup__label">客場</span>' +
-    '<span class="detail-matchup__name">' +
-    escapeHtml(awayNm) +
-    '</span></div></section>' +
+    headerActions +
+    '</div>' +
+    '</section>' +
     '<section class="detail-panel" aria-labelledby="match-detail-info-heading">' +
     '<h2 id="match-detail-info-heading" class="detail-panel__title">賽事資訊</h2>' +
     '<dl class="detail-dl">' +
@@ -1892,25 +1936,29 @@ function matchDetailHeaderActionsHtml(m, v) {
   var parts = [];
   if (m.venue_id != null && String(m.venue_id).trim() !== '') {
     parts.push(
-      '<a class="btn-secondary btn-secondary--header" href="#/venues/' +
+      '<a class="btn-secondary btn-secondary--header btn-inline-action btn-inline-action--venue" href="#/venues/' +
         encodeURIComponent(String(m.venue_id).trim()) +
-        '">查看球場</a>'
+        '">' +
+        msIcon('location_on', 'btn-inline-action__icon') +
+        '<span>查看球場</span></a>'
     );
   }
   var bc = getMatchBroadcastFields(m);
   var liveHref = matchLiveDetailHref(bc.live_url);
   if (liveHref) {
     parts.push(
-      '<a class="btn-detail-live btn-detail-live--header" href="' +
+      '<a class="btn-detail-live btn-detail-live--header btn-inline-action btn-inline-action--live" href="' +
         escapeHtml(liveHref) +
-        '" target="_blank" rel="noopener noreferrer">觀看直播</a>'
+        '" target="_blank" rel="noopener noreferrer">' +
+        msIcon('live_tv', 'btn-inline-action__icon') +
+        '<span>觀看直播</span></a>'
     );
   }
   if (!parts.length) {
     return '';
   }
   return (
-    '<nav class="detail-header__actions" aria-label="快捷操作">' + parts.join('') + '</nav>'
+    '<nav class="match-detail-overview__actions" aria-label="快捷操作">' + parts.join('') + '</nav>'
   );
 }
 
@@ -1986,28 +2034,25 @@ function renderVenueDetail(id) {
   var venuePoint = venueLatLng(v);
   var venueNearbyPlaces = state.places.filter(function (p) {
     var cityOk = venuePlaceSameCityNormalized(v.city, p.city);
-    var plat = parseFloat(p.lat);
-    var plng = parseFloat(p.lng);
+    var placePt = latLngFromRow_(p.lat, p.lng);
     var distOk = false;
-    if (venuePoint && !isNaN(plat) && !isNaN(plng)) {
-      var d = haversineKm(venuePoint.lat, venuePoint.lng, plat, plng);
+    if (venuePoint && placePt) {
+      var d = haversineKm(venuePoint.lat, venuePoint.lng, placePt.lat, placePt.lng);
       distOk = d <= VENUE_NEARBY_PLACES_MAX_KM;
     }
     return cityOk || distOk;
   });
   var placeItems = venueNearbyPlaces.map(function (p) {
-    var lat = parseFloat(p.lat);
-    var lng = parseFloat(p.lng);
-    var hasPoint = !isNaN(lat) && !isNaN(lng);
-    var km =
-      venuePoint && hasPoint ? haversineKm(venuePoint.lat, venuePoint.lng, lat, lng) : null;
+    var placePt = latLngFromRow_(p.lat, p.lng);
+    var hasPoint = placePt != null;
+    var km = venuePoint ? placeDistanceKmFromVenue_(v.city, p.city, venuePoint, placePt) : null;
     var mapFromSheet = normalizeHttpUrl(p.map_url);
     var mapHref = mapFromSheet;
     var mapLinkIsCoords = false;
     if (!mapHref && hasPoint) {
       mapHref =
         'https://www.google.com/maps/search/?api=1&query=' +
-        encodeURIComponent(lat + ',' + lng);
+        encodeURIComponent(placePt.lat + ',' + placePt.lng);
       mapLinkIsCoords = true;
     }
     var desc = '';
@@ -2037,17 +2082,12 @@ function renderVenueDetail(id) {
   if (mapOpenUrl || mapEmbedUrl) {
     mapSection =
       '<section class="venue-block venue-map-section">' +
-      '<h2>地圖</h2>' +
+      '<h2 id="venue-map-heading" class="venue-anchor-heading">地圖</h2>' +
       '<div class="venue-map-actions">' +
       (mapOpenUrl
         ? '<a class="btn-map btn-map--primary" href="' +
           escapeHtml(mapOpenUrl) +
           '" target="_blank" rel="noopener noreferrer">在 Google 地圖開啟</a>'
-        : '') +
-      (mapOpenUrl
-        ? '<a class="btn-map btn-map--secondary" href="' +
-          escapeHtml(mapOpenUrl) +
-          '" target="_blank" rel="noopener noreferrer">導航 / 路線規劃</a>'
         : '') +
       '</div>' +
       (mapEmbedUrl
@@ -2069,13 +2109,13 @@ function renderVenueDetail(id) {
     escapeHtml(displayVenueName(v)) +
     '</h1>' +
     '<nav class="venue-jump-nav" aria-label="場館段落快速跳轉">' +
-    '<button type="button" class="venue-jump-btn" data-target="venue-map-anchor">' +
+    '<button type="button" class="venue-jump-btn" data-target="venue-map-heading">' +
     msIcon('map', 'venue-jump-btn__icon') +
     '地圖</button>' +
-    '<button type="button" class="venue-jump-btn" data-target="venue-nearby-anchor">' +
+    '<button type="button" class="venue-jump-btn" data-target="venue-nearby-heading">' +
     msIcon('explore', 'venue-jump-btn__icon') +
     '附近推薦</button>' +
-    '<button type="button" class="venue-jump-btn" data-target="venue-matches-anchor">' +
+    '<button type="button" class="venue-jump-btn" data-target="venue-matches-heading">' +
     msIcon('sports', 'venue-jump-btn__icon') +
     '賽事</button>' +
     '</nav></div>' +
@@ -2087,7 +2127,7 @@ function renderVenueDetail(id) {
     (mapSection
       ? '<div id="venue-map-anchor" class="venue-anchor-target">' + mapSection + '</div>'
       : '') +
-    '<section id="venue-nearby-anchor" class="venue-block venue-nearby-section venue-anchor-target"><h2>附近景點</h2>' +
+    '<section id="venue-nearby-anchor" class="venue-block venue-nearby-section venue-anchor-target"><h2 id="venue-nearby-heading" class="venue-anchor-heading">附近景點</h2>' +
     '<p class="hint">顯示與此場館同縣市或 20 公里內的景點，可再依距離、類型篩選。</p>' +
     (placeItems.length
       ? '<div class="place-filters">' +
@@ -2116,20 +2156,28 @@ function renderVenueDetail(id) {
         '</select></label>' +
         '</div>' +
         '<ul class="place-filter-list" id="place-filter-list"></ul>'
-      : '<p class="empty">目前沒有符合條件的景點。</p>') +
+      : '<p class="empty">目前沒有符合條件的景點和餐飲，歡迎投稿推薦。</p>') +
     '</section>' +
-    '<section id="venue-matches-anchor" class="venue-block venue-matches-section venue-anchor-target"><h2>賽事</h2>' +
+    '<section id="venue-matches-anchor" class="venue-block venue-matches-section venue-anchor-target"><h2 id="venue-matches-heading" class="venue-anchor-heading">賽事</h2>' +
     buildVenueMatchFilterBarHtml() +
     '<div id="venue-matches-content"></div></section>';
 
   main.querySelectorAll('.venue-jump-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var targetId = btn.getAttribute('data-target');
+      var topHeader = document.querySelector('.top-header');
+      var detailHeader = main.querySelector('.detail-header--venue');
+      var topHeaderH = topHeader ? topHeader.getBoundingClientRect().height : 0;
+      var detailHeaderH = detailHeader ? detailHeader.getBoundingClientRect().height : 0;
+      var offset = topHeaderH + detailHeaderH + 8;
+
       var el = targetId ? document.getElementById(targetId) : null;
       if (!el) {
         return;
       }
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      var r2 = el.getBoundingClientRect();
+      var y2 = window.pageYOffset + r2.top - offset;
+      window.scrollTo({ top: Math.max(0, y2), behavior: 'smooth' });
     });
   });
 
@@ -2314,7 +2362,7 @@ function renderAbout() {
       '</header>' +
       '<section class="detail-panel">' +
       '<h2 class="detail-panel__title">關於</h2>' +
-      '<p>嗨！歡迎來到「出門看球！」小工具。這是個幫助你規劃出門看球行程的網頁。</p>' +
+      '<p>嗨！歡迎來到「出門看球！觀賽行程規劃小幫手」。這是個幫助你規劃出門看球行程的網頁。</p>' +
       '<p>我是個斷斷續續看球十多年的中度運動迷，但也是個懶得出門、能量非常低的大 I 人。不過在 2024 年 12 強棒球賽時，我因為棒球迷的熱情，受到了不小衝擊，深深感覺到自己真的該出門看球，現場應援了！</p>' +
       '<p>話雖如此，但當我真的試著出門看球時，發現因為種種因素，還滿不容易的 🥹 於是藉助 AI 之力，詠唱了這個小工具。</p>' +
       '<p>如前所述，這畢竟是個鼓勵出門看比賽的小工具，因此是以「場地」為核心製作的。不只可以看到附近場館的賽事，也會有場館周邊的行程推薦。</p>' +
@@ -2398,7 +2446,7 @@ function renderGuide() {
     '<header class="static-header"><a href="#/" class="back">' +
     msIcon('arrow_back', 'back__icon') +
     '返回</a>' +
-    '<h1>使用說明</h1>' +
+    '<h1>操作</h1>' +
     '</header>' +
     '<section class="detail-panel">' +
     '<h2 class="detail-panel__title">快速開始</h2>' +
@@ -2524,7 +2572,13 @@ function showView(name) {
   });
 }
 
+function scrollToTopOnRouteChange_() {
+  // SPA hash 切頁時預設保留上一頁捲動位置；這裡統一重置到頁首。
+  window.scrollTo(0, 0);
+}
+
 function route() {
+  scrollToTopOnRouteChange_();
   var r = parseHash();
   var p = r.parts;
   if (p[0] === 'matches' && p[1]) {

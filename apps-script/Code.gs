@@ -7,11 +7,19 @@
 var SPREADSHEET_ID = '1FPIZbRaKGvbiFKwacDNTUh5BHQkvS3O5EJaDCcYgYMM';
 var CACHE_SECONDS = 600; // 10 分鐘（需求 5–10 分鐘）
 
+/** UrlFetch 用：較接近真實瀏覽器，較易拿到含 !2d!3d / staticmap 的完整 HTML。 */
+var MAP_URL_FETCH_HEADERS_ = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
+};
+
 var SHEETS = {
   /** fusedHeaders：第 1 列若為「season 賽季」這類「欄位鍵 + 空白 + 說明」，只取第一段的 season（與 gviz header 一致） */
   matches: { dataStartRow: 3, skipLabelRow: true, fusedHeaders: true },
   leagues: { dataStartRow: 3, skipLabelRow: true },
-  venues: { dataStartRow: 3, skipLabelRow: true },
+  venues: { dataStartRow: 3, skipLabelRow: true, fusedHeaders: true },
   teams: { dataStartRow: 3, skipLabelRow: true },
   players: { dataStartRow: 3, skipLabelRow: true },
   player_team_relations: { dataStartRow: 3, skipLabelRow: true },
@@ -21,6 +29,52 @@ var SHEETS = {
   sports: { dataStartRow: 3, skipLabelRow: true, fusedHeaders: true },
   place_types: { dataStartRow: 3, skipLabelRow: true, fusedHeaders: true }
 };
+
+/**
+ * 試算表「重新整理」或再次開啟後，上方選單會出現「出門看球工具」。
+ * 若專案未綁定試算表，此函式會靜默略過（不影響 Web App）。
+ */
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu('出門看球工具')
+      .addItem('測試地圖連結解析…', 'menuTestParseMapUrl_')
+      .addSeparator()
+      .addItem('補 venues 座標（強制覆寫）', 'menuFillVenuesLatLngForce_')
+      .addItem('補 places 座標（強制覆寫）', 'menuFillPlacesLatLngForce_')
+      .addToUi();
+  } catch (err) {
+    // 獨立腳本等無試算表 UI 時略過
+  }
+}
+
+function menuTestParseMapUrl_() {
+  var ui = SpreadsheetApp.getUi();
+  var r = ui.prompt('測試地圖連結解析', '請貼上完整 https://… 連結：', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) {
+    return;
+  }
+  var url = String(r.getResponseText() || '').trim();
+  if (!url) {
+    ui.alert('未輸入連結。');
+    return;
+  }
+  var out = testParseMapUrl_(url);
+  var parsedStr = out.parsed ? JSON.stringify(out.parsed) : 'null（無法解析）';
+  ui.alert('解析結果', parsedStr + '\n\n詳見「執行」→ 執行記錄中的 Logger。', ui.ButtonSet.OK);
+}
+
+function menuFillVenuesLatLngForce_() {
+  var ui = SpreadsheetApp.getUi();
+  var r = fillVenuesLatLngFromMapUrl(true);
+  ui.alert('venues 補座標', JSON.stringify(r), ui.ButtonSet.OK);
+}
+
+function menuFillPlacesLatLngForce_() {
+  var ui = SpreadsheetApp.getUi();
+  var r = fillPlacesLatLngFromMapUrl(true);
+  ui.alert('places 補座標', JSON.stringify(r), ui.ButtonSet.OK);
+}
 
 function doGet(e) {
   e = e || { parameter: {} };
@@ -101,7 +155,7 @@ function doPost(e) {
       CacheService.getScriptCache().remove('gp:places_enriched');
       return htmlMessage_(
         '景點已新增',
-        escapeHtml_('已成功儲存，地圖連結已換算為座標。可關閉此頁。'),
+        escapeHtml_('已成功儲存。若地圖連結暫時無法解析座標，系統會先以距離未知顯示，管理者可後續補齊。可關閉此頁。'),
         true
       );
     }
@@ -174,12 +228,15 @@ function validatePlaceSubmitParams_(params) {
   }
 }
 
+function hasLatLng_(latRaw, lngRaw) {
+  var lat = parseFloat(latRaw);
+  var lng = parseFloat(lngRaw);
+  return !isNaN(lat) && !isNaN(lng);
+}
+
 function appendPlaceRow_(params) {
   var mapUrl = String(params.map_url || '').trim();
   var parsed = extractLatLngFromMapUrl_(mapUrl);
-  if (!parsed) {
-    throw new Error('無法從地圖連結解析經緯度，請改用 Google 地圖「分享」連結（需能對應到座標或地點）。');
-  }
 
   var merged = {};
   for (var pk in params) {
@@ -192,8 +249,8 @@ function appendPlaceRow_(params) {
     }
     merged[key] = params[pk];
   }
-  merged.lat = parsed.lat;
-  merged.lng = parsed.lng;
+  merged.lat = parsed ? parsed.lat : '';
+  merged.lng = parsed ? parsed.lng : '';
 
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -207,20 +264,24 @@ function appendPlaceRow_(params) {
     var numCols = headers.length;
     var row = [];
     for (var c = 0; c < numCols; c++) {
-      var h = String(headers[c] || '').trim();
-      if (!h) {
+      var hKey = normalizeFusedHeader_(headers[c]);
+      if (!hKey) {
         row.push('');
         continue;
       }
-      if (h === 'lat') {
-        row.push(parsed.lat);
+      if (hKey === 'lat') {
+        row.push(parsed ? parsed.lat : '');
         continue;
       }
-      if (h === 'lng') {
-        row.push(parsed.lng);
+      if (hKey === 'lng') {
+        row.push(parsed ? parsed.lng : '');
         continue;
       }
-      var val = merged[h];
+      if (hKey === 'missing_coords') {
+        row.push(parsed ? '' : '1');
+        continue;
+      }
+      var val = merged[hKey];
       if (val === undefined || val === null) {
         val = '';
       }
@@ -311,9 +372,18 @@ function appendPendingRow_(params) {
 }
 
 function findHeaderIndex_(headers, name) {
+  var want = String(name || '').trim();
+  if (!want) {
+    return -1;
+  }
   for (var i = 0; i < headers.length; i++) {
-    if (String(headers[i] || '').trim() === name) {
+    if (String(headers[i] || '').trim() === want) {
       return i;
+    }
+  }
+  for (var j = 0; j < headers.length; j++) {
+    if (normalizeFusedHeader_(headers[j]) === want) {
+      return j;
     }
   }
   return -1;
@@ -457,7 +527,13 @@ function getPlacesEnriched_() {
     return places.map(function (p) {
       var tid = p.type != null ? String(p.type).trim() : '';
       var typeLabel = displayLabelFromLookup_(typesMap, tid);
-      return Object.assign({}, p, { type_label: typeLabel });
+      var missingFlagCell = p.missing_coords != null ? String(p.missing_coords).trim() : '';
+      var hasCoords = hasLatLng_(p.lat, p.lng);
+      var missingCoords = missingFlagCell !== '' ? missingFlagCell !== '0' : !hasCoords;
+      return Object.assign({}, p, {
+        type_label: typeLabel,
+        missing_coords: missingCoords
+      });
     });
   });
 }
@@ -670,28 +746,55 @@ function outputJson_(obj, callback) {
 
 /**
  * ====== 地圖座標工具（map_url -> lat/lng）======
- * Apps Script 執行下拉可直接執行：
- * - fillVenuesLatLngFromMapUrl()
- * - fillPlacesLatLngFromMapUrl()
- * - fillAllLatLngFromMapUrl()
+ * 試算表選單：出門看球工具（onOpen 掛載；請重新整理試算表分頁後出現）
+ * 編輯器函式下拉執行：fillVenuesLatLngFromMapUrl、fillPlacesLatLngFromMapUrl、runTestParseMapUrlEditor
  */
-function fillVenuesLatLngFromMapUrl() {
-  return fillLatLngFromMapUrlBySheet_('venues');
+/**
+ * @param {boolean} [forceOverwrite] 為 true 時即使已有 lat/lng 仍依 map_url 重算並覆寫（排查異常座標用）
+ */
+function fillVenuesLatLngFromMapUrl(forceOverwrite) {
+  return fillLatLngFromMapUrlBySheet_('venues', !!forceOverwrite);
 }
 
-function fillPlacesLatLngFromMapUrl() {
-  return fillLatLngFromMapUrlBySheet_('places');
+/**
+ * @param {boolean} [forceOverwrite] 為 true 時即使已有 lat/lng 仍依 map_url 重算並覆寫
+ */
+function fillPlacesLatLngFromMapUrl(forceOverwrite) {
+  return fillLatLngFromMapUrlBySheet_('places', !!forceOverwrite);
 }
 
-function fillAllLatLngFromMapUrl() {
+function fillAllLatLngFromMapUrl(forceOverwrite) {
+  var fo = !!forceOverwrite;
   return {
     ok: true,
-    venues: fillVenuesLatLngFromMapUrl(),
-    places: fillPlacesLatLngFromMapUrl()
+    venues: fillVenuesLatLngFromMapUrl(fo),
+    places: fillPlacesLatLngFromMapUrl(fo)
   };
 }
 
-function fillLatLngFromMapUrlBySheet_(sheetName) {
+/**
+ * 解析單一 map 連結；結果寫入 Logger。
+ * 啟動方式：
+ * - 試算表選單「出門看球工具」→「測試地圖連結解析…」
+ * - 或從函式下拉選 runTestParseMapUrlEditor（先改內文 SAMPLE_MAP_URL 再執行）
+ */
+function testParseMapUrl_(mapUrl) {
+  var u = String(mapUrl || '').trim();
+  var out = { input: u, parsed: extractLatLngFromMapUrl_(u) };
+  Logger.log(JSON.stringify(out));
+  return out;
+}
+
+/**
+ * 給 Apps Script 編輯器用：從上方函式下拉選此函式 → 執行。
+ * 先把 SAMPLE_MAP_URL 改成要測的連結（勿留 xxxx 佔位）。
+ */
+function runTestParseMapUrlEditor() {
+  var SAMPLE_MAP_URL = 'https://maps.app.goo.gl/xxxxxxxx';
+  return testParseMapUrl_(SAMPLE_MAP_URL);
+}
+
+function fillLatLngFromMapUrlBySheet_(sheetName, forceOverwrite) {
   var cfg = SHEETS[sheetName];
   if (!cfg) {
     throw new Error('Unknown sheet config: ' + sheetName);
@@ -712,6 +815,7 @@ function fillLatLngFromMapUrlBySheet_(sheetName) {
   var mapUrlCol = findHeaderIndex_(headers, 'map_url');
   var latCol = findHeaderIndex_(headers, 'lat');
   var lngCol = findHeaderIndex_(headers, 'lng');
+  var missingCol = findHeaderIndex_(headers, 'missing_coords');
   if (mapUrlCol < 0 || latCol < 0 || lngCol < 0) {
     throw new Error(
       '分頁 ' +
@@ -751,7 +855,10 @@ function fillLatLngFromMapUrlBySheet_(sheetName) {
 
     var latVal = String(row[latCol] || '').trim();
     var lngVal = String(row[lngCol] || '').trim();
-    if (latVal && lngVal) {
+    if (!forceOverwrite && latVal && lngVal) {
+      if (missingCol >= 0) {
+        sh.getRange(startRow + i, missingCol + 1).setValue('');
+      }
       continue; // 已有座標，不覆寫
     }
 
@@ -759,12 +866,27 @@ function fillLatLngFromMapUrlBySheet_(sheetName) {
     if (!parsed) {
       failed++;
       failRows.push(startRow + i);
+      if (missingCol >= 0) {
+        sh.getRange(startRow + i, missingCol + 1).setValue('1');
+      }
       continue;
     }
 
     sh.getRange(startRow + i, latCol + 1).setValue(parsed.lat);
     sh.getRange(startRow + i, lngCol + 1).setValue(parsed.lng);
+    if (missingCol >= 0) {
+      sh.getRange(startRow + i, missingCol + 1).setValue('');
+    }
     updated++;
+  }
+
+  // 否則 GET ?resource=places|venues 可能仍回傳快取內舊座標，前端怎麼重整理都還是異常
+  var sc = CacheService.getScriptCache();
+  if (sheetName === 'places') {
+    sc.remove('gp:places_enriched');
+  } else if (sheetName === 'venues') {
+    sc.remove('gp:venues');
+    sc.remove('gp:matches_enriched_v2');
   }
 
   var result = {
@@ -773,10 +895,38 @@ function fillLatLngFromMapUrlBySheet_(sheetName) {
     scanned: scanned,
     updated: updated,
     failed: failed,
-    failedRows: failRows
+    failedRows: failRows,
+    forceOverwrite: !!forceOverwrite
   };
   Logger.log(JSON.stringify(result));
   return result;
+}
+
+function tryParseLatLngFromFetchedHtml_(html) {
+  if (!html) {
+    return null;
+  }
+  var pct = pickFirstLatLngFromPercentEncoded212d213d_(html);
+  if (pct) {
+    return pct;
+  }
+  var hintedUrl = extractEmbeddedGoogleMapsUrl_(html);
+  if (hintedUrl) {
+    var fromHinted = parseLatLngFromText_(hintedUrl);
+    if (fromHinted) {
+      return fromHinted;
+    }
+    var hintedExpanded = resolveRedirectUrl_(hintedUrl, 3);
+    var fromHintedExpanded = parseLatLngFromText_(hintedExpanded);
+    if (fromHintedExpanded) {
+      return fromHintedExpanded;
+    }
+    var fromEmbeddedUrl = parseLatLngFromText_(hintedUrl);
+    if (fromEmbeddedUrl) {
+      return fromEmbeddedUrl;
+    }
+  }
+  return parseLatLngFromText_(html);
 }
 
 function extractLatLngFromMapUrl_(rawUrl) {
@@ -800,41 +950,42 @@ function extractLatLngFromMapUrl_(rawUrl) {
     }
   }
 
-  // 3) 嘗試抓頁面內容（有些短網址頁會內嵌真正 maps 連結）
+  // 3) 抓 HTML（短網址落地頁或展開後網址各試一次）
   try {
     var resp = UrlFetchApp.fetch(url, {
       muteHttpExceptions: true,
       followRedirects: true,
-      headers: { 'User-Agent': 'Mozilla/5.0' }
+      headers: MAP_URL_FETCH_HEADERS_
     });
     var html = String(resp.getContentText() || '');
-    // 某些回應會把最終 URL 放在 window/location 或 canonical 裡
-    var hintedUrl = extractEmbeddedGoogleMapsUrl_(html);
-    if (hintedUrl) {
-      var fromHinted = parseLatLngFromText_(hintedUrl);
-      if (fromHinted) {
-        return fromHinted;
-      }
-      var hintedExpanded = resolveRedirectUrl_(hintedUrl, 3);
-      var fromHintedExpanded = parseLatLngFromText_(hintedExpanded);
-      if (fromHintedExpanded) {
-        return fromHintedExpanded;
-      }
+    var fromFetch = tryParseLatLngFromFetchedHtml_(html);
+    if (fromFetch) {
+      return fromFetch;
     }
-    var embeddedUrl = hintedUrl;
-    if (embeddedUrl) {
-      var fromEmbeddedUrl = parseLatLngFromText_(embeddedUrl);
-      if (fromEmbeddedUrl) {
-        return fromEmbeddedUrl;
+
+    if (expanded && /^https?:\/\//i.test(expanded) && expanded !== url) {
+      var resp2 = UrlFetchApp.fetch(expanded, {
+        muteHttpExceptions: true,
+        followRedirects: true,
+        headers: MAP_URL_FETCH_HEADERS_
+      });
+      var fromFetch2 = tryParseLatLngFromFetchedHtml_(String(resp2.getContentText() || ''));
+      if (fromFetch2) {
+        return fromFetch2;
       }
-    }
-    var fromHtml = parseLatLngFromText_(html);
-    if (fromHtml) {
-      return fromHtml;
     }
   } catch (e) {
     // ignore
   }
+
+  var ftid = extractFtidFromGoogleMapsUrl_(expanded);
+  if (ftid) {
+    var fromFt = tryLatLngByFetchingMapsFtidPage_(ftid);
+    if (fromFt) {
+      return fromFt;
+    }
+  }
+
   return null;
 }
 
@@ -846,7 +997,7 @@ function resolveRedirectUrl_(url, maxHops) {
       var resp = UrlFetchApp.fetch(cur, {
         muteHttpExceptions: true,
         followRedirects: false,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
+        headers: MAP_URL_FETCH_HEADERS_
       });
       var code = resp.getResponseCode();
       if (code < 300 || code >= 400) {
@@ -922,46 +1073,264 @@ function normalizeMapUrl_(raw) {
   return s;
 }
 
+/**
+ * UrlFetch 常拿到「簡版」HTML，內嵌 staticmap 的 center 美國本土預設（約 37°N, -95°W），與實際地點無關，不可當作解析結果。
+ */
+function isLikelyGoogleBotDefaultStaticMapCenter_(ll) {
+  if (!ll) {
+    return true;
+  }
+  return ll.lat > 35.5 && ll.lat < 39 && ll.lng > -102 && ll.lng < -90;
+}
+
+/** 頁內常先出現預設地圖的 !3d37…!4d-95…，需跳過直到合理 pin。 */
+function firstPlausibleLatLngFrom3d4dSequence_(s) {
+  var re = /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/g;
+  var m;
+  while ((m = re.exec(s)) !== null) {
+    var ll = normalizeLatLng_(m[1], m[2]);
+    if (ll && !isLikelyGoogleBotDefaultStaticMapCenter_(ll)) {
+      return ll;
+    }
+  }
+  return null;
+}
+
+function firstPlausibleLatLngFrom4d3dSequence_(s) {
+  var re = /!4d(-?\d+(?:\.\d+)?)!3d(-?\d+(?:\.\d+)?)/g;
+  var m;
+  while ((m = re.exec(s)) !== null) {
+    var ll = normalizeLatLng_(m[2], m[1]);
+    if (ll && !isLikelyGoogleBotDefaultStaticMapCenter_(ll)) {
+      return ll;
+    }
+  }
+  return null;
+}
+
+/**
+ * pb 的 !2d{lng}!3d{lat}；多組時優先台灣範圍（與預設圖無關，但仍過濾堪薩斯一帶）。
+ */
+function bestLatLngFrom2d3dSequence_(s) {
+  var re = /!2d(-?\d+(?:\.\d+)?)!3d(-?\d+(?:\.\d+)?)/g;
+  var m;
+  var list = [];
+  while ((m = re.exec(s)) !== null) {
+    var ll = normalizeLatLng_(m[2], m[1]);
+    if (ll && !isLikelyGoogleBotDefaultStaticMapCenter_(ll)) {
+      list.push(ll);
+    }
+  }
+  if (!list.length) {
+    return null;
+  }
+  for (var i = 0; i < list.length; i++) {
+    var c = list[i];
+    if (c.lat >= 21.5 && c.lat <= 26.5 && c.lng >= 118 && c.lng <= 124.5) {
+      return c;
+    }
+  }
+  return list[0];
+}
+
+/**
+ * 從 HTML 內多個 Static Map 的 center= 中挑一個；略過美國預設圖中心；優先台灣常見範圍。
+ */
+function pickLatLngFromStaticMapCenters_(s) {
+  var re = /center=(-?\d+(?:\.\d+)?)(?:%2[Cc]|,)(-?\d+(?:\.\d+)?)/gi;
+  var m;
+  var candidates = [];
+  while ((m = re.exec(s)) !== null) {
+    var ll = normalizeLatLng_(m[1], m[2]);
+    if (ll && !isLikelyGoogleBotDefaultStaticMapCenter_(ll)) {
+      candidates.push(ll);
+    }
+  }
+  if (!candidates.length) {
+    return null;
+  }
+  for (var i = 0; i < candidates.length; i++) {
+    var c = candidates[i];
+    if (c.lat >= 21.5 && c.lat <= 26.5 && c.lng >= 118 && c.lng <= 124.5) {
+      return c;
+    }
+  }
+  return candidates[0];
+}
+
+function isLikelyMapsHtmlChunk_(s) {
+  return s.length > 3500 || /maps\/api\/staticmap\?/i.test(s);
+}
+
+/** HTML 內 pb= 常把 ! 寫成 %21，不解碼則無法用 !2d!3d 規則。 */
+function preprocessMapHtmlForLatLng_(s) {
+  return String(s || '').replace(/%21/gi, '!');
+}
+
+/**
+ * 直接掃描 %212d{lng}%213d{lat}（pb 常見寫法，不必先經 preprocess）。
+ */
+function pickFirstLatLngFromPercentEncoded212d213d_(s) {
+  if (!s) {
+    return null;
+  }
+  var re = /%212d(-?\d+(?:\.\d+)?)%213d(-?\d+(?:\.\d+)?)/gi;
+  var m;
+  while ((m = re.exec(String(s))) !== null) {
+    var ll = normalizeLatLng_(m[2], m[1]);
+    if (ll && !isLikelyGoogleBotDefaultStaticMapCenter_(ll)) {
+      return ll;
+    }
+  }
+  return null;
+}
+
+function extractFtidFromGoogleMapsUrl_(u) {
+  if (!u) {
+    return '';
+  }
+  try {
+    var m = String(u).match(/[?&]ftid=([^&]+)/i);
+    if (!m) {
+      return '';
+    }
+    return decodeURIComponent(m[1]).trim();
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * 輕量 maps 頁（僅 ftid）在部分環境比整頁短網址落地更易帶出 pb 座標。
+ */
+function tryLatLngByFetchingMapsFtidPage_(ftid) {
+  if (!ftid) {
+    return null;
+  }
+  try {
+    var target = 'https://maps.google.com/?ftid=' + encodeURIComponent(ftid);
+    var resp = UrlFetchApp.fetch(target, {
+      muteHttpExceptions: true,
+      followRedirects: true,
+      headers: MAP_URL_FETCH_HEADERS_
+    });
+    var html = String(resp.getContentText() || '');
+    var quick = pickFirstLatLngFromPercentEncoded212d213d_(html);
+    if (quick) {
+      return quick;
+    }
+    return tryParseLatLngFromFetchedHtml_(html);
+  } catch (e1) {
+    return null;
+  }
+}
+
 function parseLatLngFromText_(text) {
   if (!text) {
     return null;
   }
-  var s = String(text);
+  var raw = String(text);
+  var fromPct = pickFirstLatLngFromPercentEncoded212d213d_(raw);
+  if (fromPct) {
+    return fromPct;
+  }
+  var s = preprocessMapHtmlForLatLng_(raw);
   var m;
 
-  // 優先地標 pin：...!3d25.0496413!4d121.5517379...
-  m = s.match(/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/);
-  if (m) {
-    return normalizeLatLng_(m[1], m[2]);
+  // 大型 HTML：先 staticmap；再 pb 的 !2d!3d（勿讓預設圖的 !3d37!4d-95 先被單次 match 吃掉）
+  if (isLikelyMapsHtmlChunk_(s)) {
+    var fromCenters = pickLatLngFromStaticMapCenters_(s);
+    if (fromCenters) {
+      return fromCenters;
+    }
+    var from2d3d = bestLatLngFrom2d3dSequence_(s);
+    if (from2d3d) {
+      return from2d3d;
+    }
+    m = s.match(/\[\[(\d{4,}\.\d+),(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)\]/);
+    if (m) {
+      var llStateEarly = normalizeLatLng_(m[3], m[2]);
+      if (llStateEarly && !isLikelyGoogleBotDefaultStaticMapCenter_(llStateEarly)) {
+        return llStateEarly;
+      }
+    }
+    var from34 = firstPlausibleLatLngFrom3d4dSequence_(s);
+    if (from34) {
+      return from34;
+    }
+    var from43 = firstPlausibleLatLngFrom4d3dSequence_(s);
+    if (from43) {
+      return from43;
+    }
   }
-  // 有些連結順序相反：!4d{lng}!3d{lat}
-  m = s.match(/!4d(-?\d+(?:\.\d+)?)!3d(-?\d+(?:\.\d+)?)/);
+
+  // 非大型片段：!2d!3d 仍優先於單次 !3d!4d
+  var from2d3dShort = bestLatLngFrom2d3dSequence_(s);
+  if (from2d3dShort) {
+    return from2d3dShort;
+  }
+
+  m = s.match(/!3d(-?\d+(?:\.\d+)?)!2d(-?\d+(?:\.\d+)?)/);
   if (m) {
-    return normalizeLatLng_(m[2], m[1]);
+    var ll32 = normalizeLatLng_(m[1], m[2]);
+    if (ll32 && !isLikelyGoogleBotDefaultStaticMapCenter_(ll32)) {
+      return ll32;
+    }
+  }
+
+  // !3d!4d / !4d!3d：略過預設地圖 pin（多組時往後找）
+  var pin34 = firstPlausibleLatLngFrom3d4dSequence_(s);
+  if (pin34) {
+    return pin34;
+  }
+  var pin43 = firstPlausibleLatLngFrom4d3dSequence_(s);
+  if (pin43) {
+    return pin43;
+  }
+
+  // APP_INITIALIZATION_STATE：[[投影x, lng, lat],…（首段為較大數字）
+  m = s.match(/\[\[(\d{4,}\.\d+),(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)\]/);
+  if (m) {
+    var llState = normalizeLatLng_(m[3], m[2]);
+    if (llState && !isLikelyGoogleBotDefaultStaticMapCenter_(llState)) {
+      return llState;
+    }
   }
 
   // 視角：.../@25.0496413,121.549163,17z...
   m = s.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)(?:,|%2C)/);
   if (m) {
-    return normalizeLatLng_(m[1], m[2]);
+    var llAt = normalizeLatLng_(m[1], m[2]);
+    if (llAt && !isLikelyGoogleBotDefaultStaticMapCenter_(llAt)) {
+      return llAt;
+    }
   }
 
   // query/q：...?query=25.033,121.564 或 ?q=...
   m = s.match(/[?&](?:q|query)=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/);
   if (m) {
-    return normalizeLatLng_(m[1], m[2]);
+    var llQ = normalizeLatLng_(m[1], m[2]);
+    if (llQ && !isLikelyGoogleBotDefaultStaticMapCenter_(llQ)) {
+      return llQ;
+    }
   }
 
   // URL encode 情境（%2C）
   m = s.match(/[?&](?:q|query)=(-?\d+(?:\.\d+)?)%2C(-?\d+(?:\.\d+)?)/i);
   if (m) {
-    return normalizeLatLng_(m[1], m[2]);
+    var llQ2 = normalizeLatLng_(m[1], m[2]);
+    if (llQ2 && !isLikelyGoogleBotDefaultStaticMapCenter_(llQ2)) {
+      return llQ2;
+    }
   }
 
-  // maps.app.goo.gl 等短網址落地後常為 ?q=地址（無數字座標），但 HTML 內嵌 Static Map 會帶 center=lat,lng
+  // 短網址落地頁、或非大型 HTML 片段中的 center=（略過美國預設圖）
   m = s.match(/center=(-?\d+(?:\.\d+)?)(?:%2[Cc]|,)(-?\d+(?:\.\d+)?)/);
   if (m) {
-    return normalizeLatLng_(m[1], m[2]);
+    var centerLl = normalizeLatLng_(m[1], m[2]);
+    if (centerLl && !isLikelyGoogleBotDefaultStaticMapCenter_(centerLl)) {
+      return centerLl;
+    }
   }
 
   return null;
