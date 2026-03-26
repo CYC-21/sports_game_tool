@@ -449,6 +449,7 @@ h3 {
 /* —— 賽事牌卡（黃底圓角、三欄：主場｜日期時間｜客場） —— */
 .match-card {
   display: block;
+  position: relative;
   text-decoration: none;
   color: var(--card-ink);
   border-radius: var(--radius-card);
@@ -456,6 +457,33 @@ h3 {
   border-left: 6px solid var(--ink-navy);
   box-shadow: 0 4px 18px var(--shadow-card-a), 0 2px 6px var(--shadow-card-b);
   transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.match-card__live-indicator {
+  position: absolute;
+  right: 18px;
+  bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: auto;
+  height: auto;
+  color: var(--red);
+  pointer-events: none;
+}
+
+.match-card__live-indicator-icon {
+  font-size: 1.08rem !important;
+  opacity: 1;
+}
+
+.match-card__live-indicator-text {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  text-shadow: 0 0 1px rgb(0 0 0 / 12%);
 }
 
 .match-card:hover {

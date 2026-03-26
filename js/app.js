@@ -879,6 +879,8 @@ function matchCardCenterHtml(m, meta) {
 function matchCardLiHtml(m, metaExtras) {
   var pres = matchCardPresentation(m);
   var meta = pres.meta;
+  var bc = getMatchBroadcastFields(m);
+  var hasLive = bc && bc.live_url != null && String(bc.live_url).trim() !== '';
   var leagueLabel = displayLeagueName(m);
   var homeHas = m.home_team_name != null && String(m.home_team_name).trim() !== '';
   var awayHas = m.away_team_name != null && String(m.away_team_name).trim() !== '';
@@ -917,6 +919,12 @@ function matchCardLiHtml(m, metaExtras) {
     leagueLabel && String(leagueLabel).trim() !== ''
       ? '<div class="match-card__league">' + escapeHtml(String(leagueLabel)) + '</div>'
       : '';
+  var liveBadgeHtml = hasLive
+    ? '<span class="match-card__live-indicator" aria-label="有直播連結" title="有直播連結">' +
+      msIcon('live_tv', 'match-card__live-indicator-icon') +
+      '<span class="match-card__live-indicator-text">LIVE</span>' +
+      '</span>'
+    : '';
   return (
     '<li class="match-list__item">' +
     '<a class="match-card ' +
@@ -924,6 +932,7 @@ function matchCardLiHtml(m, metaExtras) {
     '" href="#/matches/' +
     encodeURIComponent(m.id) +
     '">' +
+    liveBadgeHtml +
     leagueHtml +
     '<div class="match-card__grid">' +
     '<div class="match-card__team match-card__team--home">' +
