@@ -1,5 +1,5 @@
 # 出門看球！觀賽行程規劃小幫手
-### [🔗](https://cyc-21.github.io/sports_game_tool/#/) 直接前往小幫手 [🔗](https://cyc-21.github.io/sports_game_tool/#/)
+### [🔗 直接前往小幫手 🔗](https://cyc-21.github.io/sports_game_tool/#/)
 
 以「場館」為核心的觀賽行程工具：可依地區、運動、聯盟、時間查賽事，查看場館與附近景點，並提供賽事／景點投稿。
 
