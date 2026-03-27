@@ -919,8 +919,18 @@ function matchCardLiHtml(m, metaExtras) {
     leagueLabel && String(leagueLabel).trim() !== ''
       ? '<div class="match-card__league">' + escapeHtml(String(leagueLabel)) + '</div>'
       : '';
+  // NOTE: cannot nest <button> inside <a>; use focusable span for corner actions.
+  var shareBadgeHtml =
+    '<span role="button" tabindex="0" class="match-card__corner-btn match-card__share-indicator" data-match-share="' +
+    escapeHtml(String(m.id)) +
+    '" aria-label="分享賽事" title="分享賽事">' +
+    msIcon('share', 'match-card__share-indicator-icon') +
+    '<span class="match-card__share-indicator-text">SHARE</span>' +
+    '</span>';
   var liveBadgeHtml = hasLive
-    ? '<span class="match-card__live-indicator" aria-label="有直播連結" title="有直播連結">' +
+    ? '<span role="button" tabindex="0" class="match-card__corner-btn match-card__live-indicator" data-match-live="' +
+      escapeHtml(String(m.id)) +
+      '" aria-label="開啟直播" title="開啟直播">' +
       msIcon('live_tv', 'match-card__live-indicator-icon') +
       '<span class="match-card__live-indicator-text">LIVE</span>' +
       '</span>'
@@ -932,6 +942,7 @@ function matchCardLiHtml(m, metaExtras) {
     '" href="#/matches/' +
     encodeURIComponent(m.id) +
     '">' +
+    shareBadgeHtml +
     liveBadgeHtml +
     leagueHtml +
     '<div class="match-card__grid">' +
@@ -1842,7 +1853,7 @@ function renderExplore() {
   }
   var content = $('#explore-content');
   if (state.loading) {
-    content.innerHTML = '<p class="empty">載入中…</p>';
+    content.innerHTML = '<p class="empty"><span class="loading-text">載入中</span></p>';
     return;
   }
   if (state.error) {
@@ -1900,6 +1911,10 @@ function renderMatchDetail(id) {
   }
   var matchupTitle = homeNm + ' vs. ' + awayNm;
   var headerActions = matchDetailHeaderActionsHtml(m, v);
+  var shareBtnHtml =
+    '<button type="button" class="btn-secondary btn-secondary--header btn-inline-action btn-inline-action--share detail-panel__action-share" data-share-match="1">' +
+    msIcon('share', 'btn-inline-action__icon') +
+    '<span>分享賽事</span></button>';
   main.innerHTML =
     '<header class="detail-header detail-header--match">' +
     '<a href="#/" class="back">' +
@@ -1937,7 +1952,1199 @@ function renderMatchDetail(id) {
     detailRow('聯盟', displayLeagueName(m)) +
     detailLiveRow(m) +
     detailRow('備註', m.note || '') +
-    '</dl></section>';
+    '</dl></section>' +
+    '<div class="match-detail-section-actions" aria-label="賽事資訊操作">' +
+    shareBtnHtml +
+    '</div>';
+
+  wireMatchShareUi_(main, m, v, meta);
+}
+
+function ensureShareModalHtml_(host) {
+  var existing = host.querySelector('[data-share-modal="1"]');
+  if (existing) {
+    return existing;
+  }
+  var wrap = document.createElement('div');
+  wrap.innerHTML =
+    '<div class="share-modal" data-share-modal="1" hidden>' +
+    '<div class="share-modal__backdrop" data-share-close="1" aria-hidden="true"></div>' +
+    '<div class="share-modal__panel" role="dialog" aria-modal="true" aria-label="分享賽事">' +
+    '<header class="share-modal__head">' +
+    '<h2 class="share-modal__title">分享賽事</h2>' +
+    '<button type="button" class="share-modal__close" data-share-close="1" aria-label="關閉">' +
+    msIcon('close', 'share-modal__close-icon') +
+    '</button>' +
+    '</header>' +
+    '<div class="share-modal__body">' +
+    '<div class="share-preview">' +
+    '<canvas id="share-canvas" width="1080" height="1080"></canvas>' +
+    '</div>' +
+    '<div class="share-form">' +
+    '<div class="share-form__row share-templates" role="group" aria-label="版型">' +
+    '<button type="button" class="share-tpl is-active" data-share-template="A1" aria-pressed="true">' +
+    '<span class="share-tpl__lab">資訊</span></button>' +
+    '<button type="button" class="share-tpl" data-share-template="A2" aria-pressed="false">' +
+    '<span class="share-tpl__lab">比數</span></button>' +
+    '<button type="button" class="share-tpl" data-share-template="B1" aria-pressed="false">' +
+    '<span class="share-tpl__lab">照片資訊</span></button>' +
+    '<button type="button" class="share-tpl" data-share-template="B2" aria-pressed="false">' +
+    '<span class="share-tpl__lab">照片比數</span></button>' +
+    '</div>' +
+    '<div class="share-form__row share-photo" hidden>' +
+    '<label class="share-field share-field--file"><span class="share-field__lab">照片</span><input id="share-photo-file" type="file" accept="image/*" /></label>' +
+    '</div>' +
+    '<div class="share-form__row share-score-tag" hidden>' +
+    '<label class="share-field"><span class="share-field__lab">HT/FT/無</span>' +
+    '<select id="share-score-tag">' +
+    '<option value=\"\">無</option>' +
+    '<option value=\"HT\">HT</option>' +
+    '<option value=\"FT\">FT</option>' +
+    '</select></label>' +
+    '</div>' +
+    '<div class="share-form__row share-score-fields" hidden>' +
+    '<label class="share-field"><span class="share-field__lab">主隊比數</span><input id="share-score-home" inputmode="numeric" maxlength="3" placeholder="-" /></label>' +
+    '<label class="share-field"><span class="share-field__lab">客隊比數</span><input id="share-score-away" inputmode="numeric" maxlength="3" placeholder="-" /></label>' +
+    '</div>' +
+    '<div class="share-form__row share-actions">' +
+    '<button type="button" class="btn-secondary share-download" id="share-download" disabled>下載 PNG</button>' +
+    '</div>' +
+    '</div>' +
+    '</div>' +
+    '</div>' +
+    '</div>';
+  host.appendChild(wrap.firstChild);
+  return host.querySelector('[data-share-modal="1"]');
+}
+
+function loadImageFromFile_(file) {
+  return new Promise(function (resolve, reject) {
+    if (!file) {
+      resolve(null);
+      return;
+    }
+    var reader = new FileReader();
+    reader.onerror = function () {
+      reject(new Error('Failed to read file'));
+    };
+    reader.onload = function () {
+      var img = new Image();
+      img.onload = function () {
+        resolve(img);
+      };
+      img.onerror = function () {
+        reject(new Error('Failed to decode image'));
+      };
+      img.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+var shareModalController_ = null;
+
+function getShareModalController_() {
+  if (shareModalController_) return shareModalController_;
+
+  var host = document.body;
+  var modal = ensureShareModalHtml_(host);
+  if (!modal) return null;
+
+  var closeEls = modal.querySelectorAll('[data-share-close="1"]');
+  var tplBtns = modal.querySelectorAll('[data-share-template]');
+  var scoreTagRow = modal.querySelector('.share-score-tag');
+  var scoreFieldsRow = modal.querySelector('.share-score-fields');
+  var photoRow = modal.querySelector('.share-photo');
+  var scoreTag = modal.querySelector('#share-score-tag');
+  var scoreHome = modal.querySelector('#share-score-home');
+  var scoreAway = modal.querySelector('#share-score-away');
+  var fileInput = modal.querySelector('#share-photo-file');
+  var btnDl = modal.querySelector('#share-download');
+  var canvas = modal.querySelector('#share-canvas');
+
+  var ctxState = { m: null, v: null, meta: null };
+  var shareState = { template: 'A1', photoImg: null };
+  var lastDrawOk = false;
+
+  function withScore_() {
+    return shareState.template === 'A2' || shareState.template === 'B2';
+  }
+  function withPhoto_() {
+    return shareState.template === 'B1' || shareState.template === 'B2';
+  }
+  function syncForm_() {
+    if (scoreTagRow) scoreTagRow.hidden = !withScore_();
+    if (scoreFieldsRow) scoreFieldsRow.hidden = !withScore_();
+    if (photoRow) photoRow.hidden = !withPhoto_();
+  }
+  function setCanvasSize_() {
+    if (!canvas) return;
+    if (shareState.template === 'A1' || shareState.template === 'A2') {
+      if (canvas.width !== 1080 || canvas.height !== 1080) {
+        canvas.width = 1080;
+        canvas.height = 1080;
+      }
+    } else {
+      if (canvas.width !== 1080 || canvas.height !== 1350) {
+        canvas.width = 1080;
+        canvas.height = 1350;
+      }
+    }
+  }
+  function setActiveTpl_(t) {
+    shareState.template = t;
+    tplBtns.forEach(function (b) {
+      var on = b.getAttribute('data-share-template') === t;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    syncForm_();
+  }
+
+  tplBtns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      setActiveTpl_(b.getAttribute('data-share-template') || 'A1');
+      redrawAll_();
+    });
+  });
+
+  async function redrawAll_() {
+    if (!ctxState.m) return;
+    syncForm_();
+    setCanvasSize_();
+    var m = ctxState.m;
+    var v = ctxState.v;
+    var meta = ctxState.meta;
+    var common = {
+      title: (m.home_team_name || '—') + ' vs. ' + (m.away_team_name || '—'),
+      homeName: m.home_team_name || '—',
+      awayName: m.away_team_name || '—',
+      isoStart: m.start_time,
+      timeText: formatTime(m.start_time),
+      sportText: displaySportLabel(m),
+      statusText: meta && meta.label ? String(meta.label) : '',
+      venueText: displayVenueName(v, m.venue_name),
+      cityText: (v && v.city) || m.venue_city || '',
+      scoreTag: scoreTag ? String(scoreTag.value || '') : '',
+      homeScore: scoreHome ? String(scoreHome.value || '').trim() : '',
+      awayScore: scoreAway ? String(scoreAway.value || '').trim() : ''
+    };
+    var res = await drawShareImage_(
+      Object.assign({}, common, {
+        canvas: canvas,
+        template: shareState.template,
+        photoImg: shareState.photoImg
+      })
+    );
+    lastDrawOk = !!(res && res.ok);
+    if (btnDl) btnDl.disabled = !lastDrawOk;
+  }
+
+  function openForMatch_(m, v, meta) {
+    ctxState.m = m;
+    ctxState.v = v;
+    ctxState.meta = meta;
+    modal.hidden = false;
+    lastDrawOk = false;
+    if (btnDl) btnDl.disabled = true;
+    redrawAll_();
+  }
+
+  function close_() {
+    modal.hidden = true;
+  }
+
+  closeEls.forEach(function (el) {
+    el.addEventListener('click', function () {
+      close_();
+    });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (!modal.hidden && e.key === 'Escape') {
+      close_();
+    }
+  });
+
+  if (scoreTag) scoreTag.addEventListener('change', redrawAll_);
+  if (scoreHome) scoreHome.addEventListener('input', redrawAll_);
+  if (scoreAway) scoreAway.addEventListener('input', redrawAll_);
+  if (fileInput) {
+    fileInput.addEventListener('change', async function () {
+      if (!fileInput.files || !fileInput.files[0]) {
+        shareState.photoImg = null;
+        redrawAll_();
+        return;
+      }
+      try {
+        shareState.photoImg = await loadImageFromFile_(fileInput.files[0]);
+      } catch (e1) {
+        shareState.photoImg = null;
+      }
+      redrawAll_();
+    });
+  }
+  if (btnDl) {
+    btnDl.addEventListener('click', function () {
+      if (!canvas || !ctxState.m) return;
+      var mmdd = '';
+      try {
+        mmdd = formatTime(ctxState.m.start_time).split(' ')[0].replace('/', '');
+      } catch (e2) {
+        mmdd = '';
+      }
+      var fname = 'match-' + (ctxState.m.id || 'share') + (mmdd ? '-' + mmdd : '') + '.png';
+      downloadCanvasPng_(canvas, fname);
+    });
+  }
+
+  shareModalController_ = {
+    openForMatch: openForMatch_,
+    close: close_,
+    redraw: redrawAll_
+  };
+  return shareModalController_;
+}
+
+function openShareModalForMatch_(m, v, meta) {
+  var ctl = getShareModalController_();
+  if (!ctl) return;
+  ctl.openForMatch(m, v, meta);
+}
+
+function coverDrawImage_(ctx, img, x, y, w, h) {
+  var iw = img.naturalWidth || img.width;
+  var ih = img.naturalHeight || img.height;
+  if (!iw || !ih) {
+    return;
+  }
+  var s = Math.max(w / iw, h / ih);
+  var sw = w / s;
+  var sh = h / s;
+  var sx = (iw - sw) / 2;
+  var sy = (ih - sh) / 2;
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+}
+
+function roundRectPath_(ctx, x, y, w, h, r) {
+  var rr = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+function wrapTextLines_(ctx, text, maxWidth) {
+  var s = String(text || '').trim();
+  if (!s) {
+    return [];
+  }
+  var out = [];
+  var line = '';
+  for (var i = 0; i < s.length; i++) {
+    var ch = s.charAt(i);
+    var next = line + ch;
+    if (ctx.measureText(next).width <= maxWidth || !line) {
+      line = next;
+    } else {
+      out.push(line);
+      line = ch;
+    }
+  }
+  if (line) {
+    out.push(line);
+  }
+  return out;
+}
+
+async function drawShareImage_(opts) {
+  opts = opts || {};
+  var canvas = opts.canvas;
+  if (!canvas) {
+    return { ok: false, error: 'No canvas' };
+  }
+  if (document.fonts && document.fonts.ready) {
+    try {
+      await document.fonts.ready;
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  if (document.fonts && document.fonts.load) {
+    try {
+      await Promise.all([
+        document.fonts.load('10px "Dela Gothic One"'),
+        document.fonts.load('10px "TASA Explorer"'),
+        document.fonts.load('10px "Noto Sans TC"'),
+        document.fonts.load('10px "Material Symbols Outlined"')
+      ]);
+    } catch (e2) {
+      /* ignore */
+    }
+  }
+  var ctx = canvas.getContext('2d');
+  var W = canvas.width;
+  var H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  var template = String(opts.template || 'A1');
+  var withPhoto = template === 'B1' || template === 'B2';
+  var withScore = template === 'A2' || template === 'B2';
+
+  function cssRadiusPx_(varName, fallback) {
+    if (typeof window === 'undefined' || !window.getComputedStyle) return fallback;
+    try {
+      var v = getComputedStyle(document.documentElement).getPropertyValue(varName);
+      var n = parseFloat(String(v || '').trim());
+      return isNaN(n) ? fallback : n;
+    } catch (e) {
+      return fallback;
+    }
+  }
+
+  function shareRadiusPx_(w, h) {
+    // Keep rounding consistent with site radii, scaled to canvas size.
+    var base = Math.min(w, h);
+    var rCss = cssRadiusPx_('--radius-card', 12);
+    var r = (rCss * base) / 720; // 720 is app max width baseline
+    r = Math.max(14, Math.min(32, r));
+    return Math.round(r);
+  }
+
+  // base (yellow card with rounded corners)
+  var radius = shareRadiusPx_(W, H);
+  roundRectPath_(ctx, 0, 0, W, H, radius);
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = '#f7b728';
+  ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+
+  var timeText = opts.timeText || '';
+  var isoStart = opts.isoStart || '';
+  var sportText = opts.sportText || '';
+  var statusText = opts.statusText || '';
+  var venueText = opts.venueText || '';
+  var cityText = opts.cityText || '';
+  var tag = String(opts.scoreTag || '');
+  var hs = String(opts.homeScore || '').trim();
+  var as = String(opts.awayScore || '').trim();
+
+  function splitDateTime_(t) {
+    var s = String(t || '');
+    var parts = s.split(' ');
+    return { date: parts[0] || s, time: parts[1] || '' };
+  }
+  var dt = splitDateTime_(timeText);
+  var home = opts.homeName || '';
+  var away = opts.awayName || '';
+  var placeLine = [venueText, cityText].filter(Boolean).join(' · ');
+
+  function setFont_(weight, px) {
+    ctx.font = weight + ' ' + Math.round(px) + 'px "TASA Explorer","Noto Sans TC",sans-serif';
+  }
+
+  function setFontTime_(weight, px) {
+    ctx.font = weight + ' ' + Math.round(px) + 'px "Dela Gothic One",sans-serif';
+  }
+
+  function setFontIcon_(px) {
+    ctx.font =
+      '400 ' + Math.round(px) + 'px "Material Symbols Outlined","Material Symbols Rounded",sans-serif';
+  }
+
+  function drawTextFit_(text, x, y, maxWidth, basePx, weight, align) {
+    var s = String(text || '').trim();
+    if (!s) return;
+    var px = basePx;
+    ctx.textAlign = align || 'left';
+    while (px > 18) {
+      setFont_(weight, px);
+      if (ctx.measureText(s).width <= maxWidth) break;
+      px *= 0.94;
+    }
+    ctx.fillText(s, x, y);
+  }
+
+  function drawTextFitTime_(text, x, y, maxWidth, basePx, weight, align) {
+    var s = String(text || '').trim();
+    if (!s) return;
+    var px = basePx;
+    ctx.textAlign = align || 'left';
+    while (px > 18) {
+      setFontTime_(weight, px);
+      if (ctx.measureText(s).width <= maxWidth) break;
+      px *= 0.94;
+    }
+    ctx.fillText(s, x, y);
+  }
+
+  function fitTimeFont_(text, maxWidth, basePx, weight) {
+    var s = String(text || '').trim();
+    if (!s) return { text: '', px: basePx, width: 0, ascent: 0, descent: 0 };
+    var px = basePx;
+    while (px > 18) {
+      setFontTime_(weight, px);
+      var m = ctx.measureText(s);
+      if (m.width <= maxWidth) {
+        return {
+          text: s,
+          px: px,
+          width: m.width,
+          ascent: m.actualBoundingBoxAscent || px * 0.8,
+          descent: m.actualBoundingBoxDescent || px * 0.2
+        };
+      }
+      px *= 0.94;
+    }
+    setFontTime_(weight, px);
+    var mm = ctx.measureText(s);
+    return {
+      text: s,
+      px: px,
+      width: mm.width,
+      ascent: mm.actualBoundingBoxAscent || px * 0.8,
+      descent: mm.actualBoundingBoxDescent || px * 0.2
+    };
+  }
+
+  function drawTimeTextHalo_(text, x, y, align, px, weight, strokeW) {
+    var s = String(text || '').trim();
+    if (!s) return;
+    ctx.save();
+    ctx.textAlign = align || 'left';
+    ctx.textBaseline = 'alphabetic';
+    setFontTime_(weight, px);
+
+    ctx.shadowColor = 'rgba(0,0,0,0.22)';
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 2;
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.88)';
+    ctx.lineWidth = strokeW || Math.max(6, Math.round(px * 0.06));
+    ctx.lineJoin = 'round';
+    ctx.strokeText(s, x, y);
+    ctx.restore();
+
+    ctx.textAlign = align || 'left';
+    ctx.textBaseline = 'alphabetic';
+    setFontTime_(weight, px);
+    ctx.fillText(s, x, y);
+  }
+
+  function drawCenterFit_(text, cx, y, maxWidth, basePx, weight) {
+    drawTextFit_(text, cx, y, maxWidth, basePx, weight, 'center');
+  }
+
+  function drawCenterFitTime_(text, cx, y, maxWidth, basePx, weight) {
+    drawTextFitTime_(text, cx, y, maxWidth, basePx, weight, 'center');
+  }
+
+  function weekdayLabel_(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    var map = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'];
+    return map[d.getDay()] || '';
+  }
+
+  function drawWeekAfterRightAlignedDate_(dateText, weekdayText, xRight, y, datePx) {
+    var d = String(dateText || '').trim();
+    var w = String(weekdayText || '').trim();
+    if (!d || !w) return;
+    setFont_('800', datePx);
+    var dateW = ctx.measureText(d).width;
+    var gap = 10;
+    var xLeft = xRight + gap;
+    ctx.fillStyle = 'rgba(7,37,163,0.55)';
+    ctx.font = '700 30px "TASA Explorer","Noto Sans TC",sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(' ' + w, xLeft, y);
+  }
+
+  function drawDateWithWeekday_(dateText, weekdayText, cx, y, maxWidth, datePx) {
+    var d = String(dateText || '').trim();
+    if (!d) {
+      ctx.fillStyle = '#0725a3';
+      drawCenterFitTime_('—', cx, y, maxWidth, datePx, '400');
+      return;
+    }
+    ctx.fillStyle = '#0725a3';
+    drawCenterFitTime_(d, cx, y, maxWidth, datePx, '400');
+    var w = String(weekdayText || '').trim();
+    if (!w) return;
+
+    // same style as footer mark: "出門看球！" (size + color + font)
+    setFontTime_('400', datePx);
+    var dateW = ctx.measureText(d).width;
+    var smallPx = 30;
+    var wText = ' ' + w;
+    ctx.font = '700 ' + smallPx + 'px "TASA Explorer","Noto Sans TC",sans-serif';
+    var wW = ctx.measureText(wText).width;
+    var gap = 10;
+    var xLeft = cx + dateW / 2 + gap;
+    if (xLeft + wW > cx + maxWidth / 2) {
+      xLeft = cx + maxWidth / 2 - wW;
+    }
+    ctx.fillStyle = 'rgba(7,37,163,0.55)';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(wText, xLeft, y);
+  }
+
+  function drawPair_(leftText, rightText, y, pad, basePx) {
+    ctx.fillStyle = '#0725a3';
+    drawTextFit_(leftText, pad, y, W / 2 - pad - 12, basePx, '900', 'left');
+    drawTextFit_(rightText, W - pad, y, W / 2 - pad - 12, basePx, '900', 'right');
+    ctx.fillStyle = 'rgba(7,37,163,0.65)';
+    setFont_('800', Math.max(22, basePx * 0.28));
+    ctx.textAlign = 'center';
+    ctx.fillText('vs.', W / 2, y - Math.round(basePx * 0.16));
+  }
+
+  function drawLocationCentered_(label, y, baseTextPx) {
+    var s = String(label || '').trim();
+    if (!s) return;
+    var iconName = 'location_on';
+    var iconPx = Math.round(baseTextPx * 1.05);
+    var gap = Math.round(baseTextPx * 0.26);
+    setFont_('800', baseTextPx);
+    var textW = ctx.measureText(s).width;
+    setFontIcon_(iconPx);
+    var iconW = ctx.measureText(iconName).width;
+    var totalW = iconW + gap + textW;
+    var startX = Math.round((W - totalW) / 2);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#0725a3';
+    ctx.textBaseline = 'middle';
+    var midY = y - Math.round(baseTextPx * 0.18);
+    setFontIcon_(iconPx);
+    ctx.fillText(iconName, startX, midY);
+    setFont_('800', baseTextPx);
+    ctx.fillText(s, startX + iconW + gap, midY);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawLocationCenteredOffset_(label, y, baseTextPx, dx, enhanceOnPhoto) {
+    dx = dx || 0;
+    var s = String(label || '').trim();
+    if (!s) return;
+    var iconName = 'location_on';
+    var iconPx = Math.round(baseTextPx * 1.05);
+    var gap = Math.round(baseTextPx * 0.26);
+    setFont_('800', baseTextPx);
+    var textW = ctx.measureText(s).width;
+    setFontIcon_(iconPx);
+    var iconW = ctx.measureText(iconName).width;
+    var totalW = iconW + gap + textW;
+    var startX = Math.round((W - totalW) / 2 + dx);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#0725a3';
+    ctx.textBaseline = 'middle';
+    var midY = y - Math.round(baseTextPx * 0.18);
+    if (enhanceOnPhoto) {
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.22)';
+      ctx.shadowBlur = 10;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 2;
+
+      // soft white outline under icon/text for readability
+      ctx.strokeStyle = 'rgba(255,255,255,0.88)';
+      ctx.lineWidth = 6;
+      ctx.lineJoin = 'round';
+
+      setFontIcon_(iconPx);
+      ctx.strokeText(iconName, startX, midY);
+      setFont_('800', baseTextPx);
+      ctx.strokeText(s, startX + iconW + gap, midY);
+
+      ctx.restore();
+    }
+
+    setFontIcon_(iconPx);
+    ctx.fillText(iconName, startX, midY);
+    setFont_('800', baseTextPx);
+    ctx.fillText(s, startX + iconW + gap, midY);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawBDateTimeCentered_(dateText, weekdayText, timeText, y, datePx, timePx) {
+    var d = String(dateText || '').trim();
+    var w = String(weekdayText || '').trim();
+    var t = String(timeText || '').trim();
+    if (!d && !t) return;
+
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+
+    // measure widths
+    setFont_('800', datePx);
+    var dStr = d || '';
+    var dW = dStr ? ctx.measureText(dStr).width : 0;
+
+    var wStr = w ? ' ' + w : '';
+    ctx.font = '700 30px "TASA Explorer","Noto Sans TC",sans-serif';
+    var wW = wStr ? ctx.measureText(wStr).width : 0;
+
+    setFont_('800', timePx);
+    var tStr = t || '';
+    var tW = tStr ? ctx.measureText(tStr).width : 0;
+
+    var gap1 = dStr && (wStr || tStr) ? 6 : 0;
+    var gap2 = (dStr || wStr) && tStr ? 18 : 0;
+
+    var totalW = dW + (wW ? gap1 + wW : 0) + (tW ? gap2 + tW : 0);
+    var x = Math.round(W / 2 - totalW / 2);
+
+    // draw date (blue)
+    ctx.fillStyle = '#0725a3';
+    if (dStr) {
+      setFont_('800', datePx);
+      ctx.fillText(dStr, x, y);
+      x += dW;
+    }
+    // weekday (grey, footer style)
+    if (wW) {
+      x += gap1;
+      ctx.fillStyle = 'rgba(7,37,163,0.55)';
+      ctx.font = '700 30px "TASA Explorer","Noto Sans TC",sans-serif';
+      ctx.fillText(wStr, x, y);
+      x += wW;
+    }
+    // time (blue)
+    if (tW) {
+      x += gap2;
+      ctx.fillStyle = '#0725a3';
+      setFont_('800', timePx);
+      ctx.fillText(tStr, x, y);
+    }
+  }
+
+  function drawLocationRight_(label, xRight, y, baseTextPx) {
+    var s = String(label || '').trim();
+    if (!s) return;
+    var iconName = 'location_on';
+    var iconPx = Math.round(baseTextPx * 1.05);
+    var gap = Math.round(baseTextPx * 0.26);
+    setFont_('800', baseTextPx);
+    var textW = ctx.measureText(s).width;
+    setFontIcon_(iconPx);
+    var iconW = ctx.measureText(iconName).width;
+    var totalW = iconW + gap + textW;
+    var startX = Math.round(xRight - totalW);
+    ctx.fillStyle = '#0725a3';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    var midY = y - Math.round(baseTextPx * 0.18);
+    setFontIcon_(iconPx);
+    ctx.fillText(iconName, startX, midY);
+    setFont_('800', baseTextPx);
+    ctx.fillText(s, startX + iconW + gap, midY);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawDateLocationCentered_(dateText, venueLabel, y, baseTextPx) {
+    var d = String(dateText || '').trim();
+    var vlab = String(venueLabel || '').trim();
+    if (!d && !vlab) return;
+
+    var iconName = 'location_on';
+    var iconPx = Math.round(baseTextPx * 1.05);
+    var gap = Math.round(baseTextPx * 0.32);
+    var gapIcon = Math.round(baseTextPx * 0.26);
+
+    setFont_('800', baseTextPx);
+    var dW = d ? ctx.measureText(d).width : 0;
+    var vW = vlab ? ctx.measureText(vlab).width : 0;
+    setFontIcon_(iconPx);
+    var iconW = vlab ? ctx.measureText(iconName).width : 0;
+    var totalW =
+      (d ? dW : 0) +
+      (d && vlab ? gap : 0) +
+      (vlab ? iconW + gapIcon + vW : 0);
+
+    var startX = Math.round(W / 2 - totalW / 2);
+    ctx.fillStyle = '#0725a3';
+    ctx.textBaseline = 'middle';
+    var midY = y - Math.round(baseTextPx * 0.18);
+
+    if (d) {
+      setFont_('800', baseTextPx);
+      ctx.textAlign = 'left';
+      ctx.fillText(d, startX, midY);
+      startX += dW;
+    }
+    if (d && vlab) {
+      setFont_('800', baseTextPx);
+      ctx.fillText(' ', startX, midY);
+      startX += gap;
+    }
+    if (vlab) {
+      setFontIcon_(iconPx);
+      ctx.fillText(iconName, startX, midY);
+      startX += iconW + gapIcon;
+      setFont_('800', baseTextPx);
+      ctx.fillText(vlab, startX, midY);
+    }
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawTeamsA1_(homeRaw, awayRaw, yBase, pad, basePx) {
+    // Share-only rule:
+    // If a team name contains BOTH full-width (CJK) and half-width (latin/digits/symbols),
+    // always split into 2 lines (full on first line, half on second line).
+    function shareTeamLines_(raw) {
+      var s = raw == null ? '' : String(raw);
+      var hasFull = false;
+      var hasHalf = false;
+      var ch;
+      for (ch of s) {
+        var t = matchCardCharScriptClass(ch);
+        if (t === 'full') hasFull = true;
+        else hasHalf = true;
+      }
+      if (!(hasFull && hasHalf)) {
+        return { kind: 'single', a: s.trim(), b: '' };
+      }
+      var runs = [];
+      var curType = null;
+      var buf = '';
+      for (ch of s) {
+        var tt = matchCardCharScriptClass(ch);
+        if (curType === null) {
+          curType = tt;
+          buf = ch;
+        } else if (tt === curType) {
+          buf += ch;
+        } else {
+          runs.push({ type: curType, text: buf });
+          curType = tt;
+          buf = ch;
+        }
+      }
+      if (buf) runs.push({ type: curType, text: buf });
+      var fullParts = [];
+      var halfParts = [];
+      for (var r = 0; r < runs.length; r++) {
+        if (runs[r].type === 'full') fullParts.push(runs[r].text);
+        else halfParts.push(runs[r].text);
+      }
+      var fullLine = fullParts.join('').trim();
+      var halfLine = halfParts
+        .map(function (p) {
+          return p.replace(/\s+/g, ' ').trim();
+        })
+        .filter(function (p) {
+          return p.length;
+        })
+        .join(' ')
+        .trim();
+      if (!fullLine || !halfLine) {
+        return { kind: 'single', a: s.trim(), b: '' };
+      }
+      return { kind: 'stacked', a: fullLine, b: halfLine };
+    }
+
+    var homeL = shareTeamLines_(homeRaw);
+    var awayL = shareTeamLines_(awayRaw);
+    var hasStacked = homeL.kind === 'stacked' || awayL.kind === 'stacked';
+    var y = hasStacked ? yBase : yBase - 20;
+
+    function fits_(px) {
+      var fullPx = Math.round(px * 0.64);
+      var halfPx = Math.round(px * 0.44);
+      var ok = true;
+
+      function maxLineW_(lines) {
+        if (lines.kind === 'single') {
+          setFont_('900', px);
+          return ctx.measureText(lines.a).width;
+        }
+        var w1;
+        var w2;
+        setFont_('900', fullPx);
+        w1 = ctx.measureText(lines.a).width;
+        setFont_('900', halfPx);
+        w2 = ctx.measureText(lines.b).width;
+        return Math.max(w1, w2);
+      }
+
+      if (maxLineW_(homeL) > maxWidthEach) ok = false;
+      if (maxLineW_(awayL) > maxWidthEach) ok = false;
+      return ok;
+    }
+
+    // user request: fixed shrink percentage for ALL teams (share image),
+    // then only shrink further if it still doesn't fit.
+    var px = Math.round(basePx * 0.42);
+    while (px > 44 && !fits_(px)) {
+      px = Math.round(px * 0.94);
+    }
+
+    // Keep stacked teams visually consistent with single-line teams:
+    // line 1 uses the same primary size; line 2 is slightly smaller only.
+    var fullPx = Math.round(px);
+    var halfPx = Math.round(px * 0.78);
+    var lineGap = Math.round(px * 0.92);
+    var leftCx = Math.round(W * 0.25);
+    var rightCx = Math.round(W * 0.75);
+    var maxWidthEach = Math.round(W / 2 - pad * 2);
+
+    function drawTeam_(lines, x, align) {
+      ctx.fillStyle = '#0725a3';
+      ctx.textAlign = align;
+      if (lines.kind === 'single') {
+        setFont_('900', px);
+        ctx.fillText(lines.a || '—', x, y);
+        return;
+      }
+      setFont_('900', fullPx);
+      ctx.fillText(lines.a || '—', x, y - lineGap);
+      setFont_('900', halfPx);
+      ctx.fillText(lines.b || '', x, y);
+    }
+
+    // user request: home centered in left half; away centered in right half
+    drawTeam_(homeL, leftCx, 'center');
+    drawTeam_(awayL, rightCx, 'center');
+
+    ctx.fillStyle = 'rgba(7,37,163,0.65)';
+    ctx.textAlign = 'center';
+    // user request: vs. font size +300% (relative to previous small "vs.")
+    setFont_('900', Math.max(64, Math.round(px * 0.72)));
+    var vsY = hasStacked ? y - Math.round(lineGap / 2) : y;
+    // optical adjustment for this font: nudge right without affecting team columns
+    ctx.fillText('vs.', W / 2 + 20, vsY);
+  }
+
+  if (template === 'A1' || template === 'A2') {
+    // A: align to SVG (viewBox 300x300) by ratios
+    var base = 300;
+    var padA = Math.round(W * 0.075);
+
+    var yDate = Math.round((68.83 / base) * H);
+    var yTime = Math.round((117.47 / base) * H) + 14;
+    var yTeams = Math.round((187.9 / base) * H);
+    var yLoc = Math.round((251.86 / base) * H);
+
+    ctx.fillStyle = '#0725a3';
+
+    if (template === 'A2') {
+      // A2: mostly same as A1, with score in A1 date/time style (Dela),
+      // HT/FT tag in Dela at half score size,
+      // bottom date/time styled like location, using TASA.
+      // user request: score + tag font size 150%
+      var scorePx = W * 0.16 * 1.5;
+      var scoreLine = (hs || '-') + ' : ' + (as || '-');
+      var yScore = yTime - 100 + 30;
+
+      ctx.fillStyle = '#0725a3';
+      if (tag) {
+        var tagText = String(tag).trim();
+        var fitScoreA2 = fitTimeFont_(scoreLine, W - padA * 2, scorePx, '400');
+        var scoreTop = yScore - fitScoreA2.ascent;
+        var scoreLeft = W / 2 - fitScoreA2.width / 2;
+        var tagPx = fitScoreA2.px * 0.25;
+        setFontTime_('400', tagPx);
+        var tagM = ctx.measureText(tagText);
+        var tagDes = tagM.actualBoundingBoxDescent || tagPx * 0.2;
+        var yTag = scoreTop - 10 - tagDes;
+        // user request: align tag to score box left, and move with score size
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#0725a3';
+        setFontTime_('400', tagPx);
+        ctx.fillText(tagText, scoreLeft, yTag);
+      }
+      ctx.textAlign = 'center';
+      var fitScoreA2b = fitTimeFont_(scoreLine, W - padA * 2, scorePx, '400');
+      ctx.fillStyle = '#0725a3';
+      setFontTime_('400', fitScoreA2b.px);
+      ctx.fillText(fitScoreA2b.text, W / 2, yScore);
+
+      // bottom row: date/time + location (same hierarchy as location; TASA)
+      // user request: shrink to 80%
+      var metaPx = W * 0.068 * 0.8 * 0.8;
+      ctx.fillStyle = '#0725a3';
+      // user request: date + icon + location treated as a centered group
+      drawDateLocationCentered_(dt.date || '', venueText || '', yLoc, metaPx);
+    } else {
+      // date + time (centered)
+      drawDateWithWeekday_(
+        dt.date || '—',
+        weekdayLabel_(isoStart),
+        W / 2,
+        yDate,
+        W - padA * 2,
+        W * 0.16
+      );
+      ctx.fillStyle = '#0725a3';
+      drawCenterFitTime_(dt.time || '—', W / 2, yTime, W - padA * 2, W * 0.16, '400');
+      // location (centered)
+      // user request: location hierarchy smaller
+      drawLocationCentered_(placeLine || '', yLoc, W * 0.068 * 0.8);
+    }
+
+    // teams
+    ctx.textBaseline = 'alphabetic';
+    var teamsY = template === 'A1' ? yTeams + 70 : yTeams;
+    drawTeamsA1_(home || '—', away || '—', teamsY, padA, W * 0.20);
+  } else {
+    // B: align to SVG B1/B2 (already 1080x1350)
+    var padB = 90;
+    var photoX = 90;
+    var photoY = 101;
+    var photoW = 900;
+    var photoH = 675;
+    var photoR = shareRadiusPx_(W, H);
+    var photoRight = photoX + photoW;
+    var photoBottom = photoY + photoH;
+
+    // photo panel (B1/B2)
+    ctx.save();
+    roundRectPath_(ctx, photoX, photoY, photoW, photoH, photoR);
+    ctx.clip();
+    if (opts.photoImg) {
+      coverDrawImage_(ctx, opts.photoImg, photoX, photoY, photoW, photoH);
+    } else {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(photoX, photoY, photoW, photoH);
+      // hint text when no photo selected
+      ctx.fillStyle = 'rgba(7,37,163,0.55)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      setFont_('800', 44);
+      ctx.fillText('尚未選擇照片', photoX + photoW / 2, photoY + photoH / 2 - 18);
+      setFont_('700', 30);
+      ctx.fillText('可上傳照片套用在此區域', photoX + photoW / 2, photoY + photoH / 2 + 24);
+      ctx.textBaseline = 'alphabetic';
+    }
+    ctx.restore();
+
+    // score (B2) — style based on A2
+    if (template === 'B2' && withScore) {
+      var scorePxB2 = 160 * 1.5;
+      var scoreLineB2 = (hs || '-') + ' : ' + (as || '-');
+      var yScoreB2 = 812 + 30;
+      var cxScoreB2 = 760;
+      var maxWScoreB2 = 520;
+
+      ctx.fillStyle = '#0725a3';
+      ctx.textAlign = 'center';
+
+      var fitScoreB2 = fitTimeFont_(scoreLineB2, maxWScoreB2, scorePxB2, '400');
+      var scoreTopB2 = yScoreB2 - fitScoreB2.ascent;
+      var scoreLeftB2 = cxScoreB2 - fitScoreB2.width / 2;
+
+      if (tag) {
+        var tagTextB2 = String(tag).trim();
+        var tagPxB2 = fitScoreB2.px * 0.25;
+        setFontTime_('400', tagPxB2);
+        var mTagB2 = ctx.measureText(tagTextB2);
+        var tagDesB2 = mTagB2.actualBoundingBoxDescent || tagPxB2 * 0.2;
+        // tighter: tag bottom is just above score top
+        var yTagB2 = scoreTopB2 - 2 - tagDesB2;
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#0725a3';
+        drawTimeTextHalo_(tagTextB2, scoreLeftB2, yTagB2, 'left', tagPxB2, '400', 6);
+      }
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#0725a3';
+      drawTimeTextHalo_(fitScoreB2.text, cxScoreB2, yScoreB2, 'center', fitScoreB2.px, '400', 12);
+    }
+
+    // location line
+    ctx.fillStyle = '#0725a3';
+    ctx.textAlign = 'center';
+    // user request: move up 10px, nudge left 10px
+    if (template === 'B1') {
+      drawLocationCenteredOffset_(venueText || '', 801 - 10, 72, -10, true);
+    }
+
+    function drawTeamsB1_(homeRaw, awayRaw, yBase, pad, basePx) {
+      function shareTeamLines_(raw) {
+        var s = raw == null ? '' : String(raw);
+        var hasFull = false;
+        var hasHalf = false;
+        var ch;
+        for (ch of s) {
+          var t = matchCardCharScriptClass(ch);
+          if (t === 'full') hasFull = true;
+          else hasHalf = true;
+        }
+        if (!(hasFull && hasHalf)) {
+          return { kind: 'single', a: s.trim(), b: '' };
+        }
+        var runs = [];
+        var curType = null;
+        var buf = '';
+        for (ch of s) {
+          var tt = matchCardCharScriptClass(ch);
+          if (curType === null) {
+            curType = tt;
+            buf = ch;
+          } else if (tt === curType) {
+            buf += ch;
+          } else {
+            runs.push({ type: curType, text: buf });
+            curType = tt;
+            buf = ch;
+          }
+        }
+        if (buf) runs.push({ type: curType, text: buf });
+        var fullParts = [];
+        var halfParts = [];
+        for (var r = 0; r < runs.length; r++) {
+          if (runs[r].type === 'full') fullParts.push(runs[r].text);
+          else halfParts.push(runs[r].text);
+        }
+        var fullLine = fullParts.join('').trim();
+        var halfLine = halfParts
+          .map(function (p) {
+            return p.replace(/\s+/g, ' ').trim();
+          })
+          .filter(function (p) {
+            return p.length;
+          })
+          .join(' ')
+          .trim();
+        if (!fullLine || !halfLine) {
+          return { kind: 'single', a: s.trim(), b: '' };
+        }
+        return { kind: 'stacked', a: fullLine, b: halfLine };
+      }
+
+      var homeL = shareTeamLines_(homeRaw);
+      var awayL = shareTeamLines_(awayRaw);
+      var hasStacked = homeL.kind === 'stacked' || awayL.kind === 'stacked';
+      var y = hasStacked ? yBase : yBase - 20;
+
+      var leftCx = Math.round(W * 0.25);
+      var rightCx = Math.round(W * 0.75);
+      var maxWidthEach = Math.round(W / 2 - pad * 2);
+
+      function fits_(px) {
+        var fullPx = Math.round(px);
+        var halfPx = Math.round(px * 0.78);
+        var ok = true;
+        function maxLineW_(lines) {
+          if (lines.kind === 'single') {
+            setFont_('900', px);
+            return ctx.measureText(lines.a).width;
+          }
+          var w1;
+          var w2;
+          setFont_('900', fullPx);
+          w1 = ctx.measureText(lines.a).width;
+          setFont_('900', halfPx);
+          w2 = ctx.measureText(lines.b).width;
+          return Math.max(w1, w2);
+        }
+        if (maxLineW_(homeL) > maxWidthEach) ok = false;
+        if (maxLineW_(awayL) > maxWidthEach) ok = false;
+        return ok;
+      }
+
+      var px = Math.round(basePx * 0.42);
+      while (px > 44 && !fits_(px)) {
+        px = Math.round(px * 0.94);
+      }
+      var fullPx = Math.round(px);
+      var halfPx = Math.round(px * 0.78);
+      var lineGap = Math.round(px * 0.92);
+
+      function drawTeam_(lines, x, align) {
+        ctx.fillStyle = '#0725a3';
+        ctx.textAlign = align;
+        if (lines.kind === 'single') {
+          setFont_('900', px);
+          ctx.fillText(lines.a || '—', x, y);
+          return;
+        }
+        setFont_('900', fullPx);
+        ctx.fillText(lines.a || '—', x, y - lineGap);
+        setFont_('900', halfPx);
+        ctx.fillText(lines.b || '', x, y);
+      }
+
+      ctx.textBaseline = 'alphabetic';
+      drawTeam_(homeL, leftCx, 'center');
+      drawTeam_(awayL, rightCx, 'center');
+
+      ctx.fillStyle = 'rgba(7,37,163,0.65)';
+      ctx.textAlign = 'center';
+      setFont_('900', Math.max(64, Math.round(px * 0.72)));
+      var vsY = hasStacked ? y - Math.round(lineGap / 2) : y;
+      ctx.fillText('vs.', W / 2 + 20, vsY);
+    }
+
+    // teams line (same share logic as A1)
+    drawTeamsB1_(home || '—', away || '—', 991, padB, 150);
+
+    // bottom date/time
+    if (template === 'B1') {
+      // user request: date + weekday + time centered, no overlap
+      drawBDateTimeCentered_(dt.date || '', weekdayLabel_(isoStart), dt.time || '', 1121, 66, 66);
+    } else {
+      // B2: bottom info = date + icon + location, centered
+      ctx.fillStyle = '#0725a3';
+      // user request: shrink to 80% (match B1 date size/weight system)
+      drawDateLocationCentered_(dt.date || '', venueText || '', 1121, 66 * 0.8);
+    }
+  }
+
+  // footer mark
+  ctx.fillStyle = 'rgba(7,37,163,0.55)';
+  ctx.font = '700 30px "TASA Explorer","Noto Sans TC",sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText('出門看球！', W - Math.round(W * 0.075), H - Math.round(H * 0.06));
+  ctx.textAlign = 'left';
+
+  return { ok: true };
+}
+
+function downloadCanvasPng_(canvas, filename) {
+  return new Promise(function (resolve) {
+    canvas.toBlob(
+      function (blob) {
+        if (!blob) {
+          resolve(false);
+          return;
+        }
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename || 'share.png';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () {
+          URL.revokeObjectURL(url);
+          a.remove();
+        }, 1500);
+        resolve(true);
+      },
+      'image/png',
+      1
+    );
+  });
+}
+
+function wireMatchShareUi_(main, m, v, meta) {
+  if (!main || !m) {
+    return;
+  }
+  var openBtn = main.querySelector('[data-share-match="1"]');
+  if (!openBtn) return;
+  openBtn.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    openShareModalForMatch_(m, v, meta);
+  });
 }
 
 /** 賽事詳情 header 右側：查看球場、觀看直播 */
@@ -2386,8 +3593,8 @@ function renderAbout() {
       '<h2 class="detail-panel__title">感謝貢獻者</h2>' +
       '<p class="hint">感謝以下提供資料的朋友們。本份資料為自動更新。</p>' +
       '<div class="contrib-grid">' +
-      '<div class="contrib-col"><h3 class="contrib-col__title">景點投稿</h3><div id="about-contrib-places"><p class="empty empty--tight">載入中…</p></div></div>' +
-      '<div class="contrib-col"><h3 class="contrib-col__title">賽事投稿</h3><div id="about-contrib-matches"><p class="empty empty--tight">載入中…</p></div></div>' +
+      '<div class="contrib-col"><h3 class="contrib-col__title">景點投稿</h3><div id="about-contrib-places"><p class="empty empty--tight"><span class="loading-text">載入中</span></p></div></div>' +
+      '<div class="contrib-col"><h3 class="contrib-col__title">賽事投稿</h3><div id="about-contrib-matches"><p class="empty empty--tight"><span class="loading-text">載入中</span></p></div></div>' +
       '</div>' +
       '</section>'
   );
@@ -2462,8 +3669,24 @@ function renderGuide() {
     '<ul class="guide-list">' +
     '<li><strong>找賽事</strong>：在首頁用「地區／運動／球場／聯盟／時間」篩選，或用搜尋框找隊名。</li>' +
     '<li><strong>看賽事詳情</strong>：點一場賽事可查看時間、場館、聯盟與轉播連結（若有）。</li>' +
+    '<li><strong>快速分享</strong>：賽事卡片右下角有 <strong>SHARE</strong>（可點按），可直接開啟分享賽事編輯器並下載 PNG。</li>' +
+    '<li><strong>快速開直播</strong>：若該場次有直播連結，賽事卡片左下角會顯示 <strong>LIVE</strong>（可點按）直接開啟直播。</li>' +
     '<li><strong>看場館</strong>：在賽事詳情點「查看球場」，可看地圖、近期賽事與附近景點。</li>' +
+    '<li><strong>分享賽事（賽事詳情）</strong>：「賽事資訊」區塊右下角可找到「分享賽事」按鈕。</li>' +
     '<li><strong>附近模式</strong>：切到「附近」可用你的大致位置依距離瀏覽（需允許定位）。</li>' +
+    '<li><strong>備註</strong>：本頁面賽事資料為純手動，確切賽事資訊請以賽事官網公告文準。</li>' +
+    '</ul>' +
+    '</section>' +
+    '<section class="detail-panel">' +
+    '<h2 class="detail-panel__title">分享賽事</h2>' +
+    '<ul class="guide-list">' +
+    '<li><strong>預覽</strong>：左側即時預覽輸出圖片。</li>' +
+    '<li><strong>版型</strong>：可選「資訊／比數／照片資訊／照片比數」。</li>' +
+    '<li><strong>照片</strong>：選擇照片後會套用到照片區塊；未選擇時會顯示提示。</li>' +
+    '<li><strong>隱私</strong>：你選擇的照片只會在本機瀏覽器內用於預覽與產圖下載，不會上傳到任何網路空間。</li>' +
+    '<li><strong>標籤</strong>：可選 <strong>HT / FT / 無</strong>。</li>' +
+    '<li><strong>分數</strong>：輸入主場與客場分數（僅比數版型會顯示）。</li>' +
+    '<li><strong>下載</strong>：點「下載 PNG」會將圖片存到本機。</li>' +
     '</ul>' +
     '</section>' +
     '<section class="detail-panel">' +
@@ -2623,10 +3846,70 @@ function route() {
   renderExplore();
 }
 
+var matchCardCornerHandlersBound_ = false;
+
+function bindMatchCardCornerHandlersOnce_() {
+  if (matchCardCornerHandlersBound_) return;
+  matchCardCornerHandlersBound_ = true;
+
+  function handle_(targetEl, e) {
+    var shareBtn = targetEl.closest('[data-match-share]');
+    if (shareBtn) {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      var id = shareBtn.getAttribute('data-match-share') || '';
+      var m = state.matches.filter(function (x) {
+        return String(x.id) === String(id);
+      })[0];
+      if (!m) return true;
+      var pres = matchCardPresentation(m);
+      var v = venueById(m.venue_id);
+      openShareModalForMatch_(m, v, pres.meta);
+      return true;
+    }
+
+    var liveBtn = targetEl.closest('[data-match-live]');
+    if (liveBtn) {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      var id2 = liveBtn.getAttribute('data-match-live') || '';
+      var m2 = state.matches.filter(function (x) {
+        return String(x.id) === String(id2);
+      })[0];
+      if (!m2) return true;
+      var bc2 = getMatchBroadcastFields(m2);
+      var href2 = matchLiveDetailHref(bc2 && bc2.live_url);
+      if (href2) {
+        window.open(href2, '_blank', 'noopener,noreferrer');
+      }
+      return true;
+    }
+    return false;
+  }
+
+  document.addEventListener('click', function (e) {
+    handle_(e.target, e);
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (!(e.key === 'Enter' || e.key === ' ')) return;
+    var t = e.target;
+    if (!t) return;
+    if (t.matches && (t.matches('[data-match-share]') || t.matches('[data-match-live]'))) {
+      handle_(t, e);
+    }
+  });
+}
+
 async function bootstrap() {
   state.loading = true;
   state.error = null;
   renderExplore();
+  bindMatchCardCornerHandlersOnce_();
   try {
     var results = await Promise.all([
       loadVenues(),
