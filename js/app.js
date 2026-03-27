@@ -934,7 +934,7 @@ function matchCardLiHtml(m, metaExtras) {
       msIcon('live_tv', 'match-card__live-indicator-icon') +
       '<span class="match-card__live-indicator-text">LIVE</span>' +
       '</span>'
-    : '';
+      : '';
   return (
     '<li class="match-list__item">' +
     '<a class="match-card ' +
@@ -2410,28 +2410,48 @@ async function drawShareImage_(opts) {
     };
   }
 
-  function drawTimeTextHalo_(text, x, y, align, px, weight, strokeW) {
+  // Glass-like score/tag typography: layered strokes on glyphs + fill (no backplate).
+  function drawScoreGlassGlyph_(text, x, y, align, px, weight, compact) {
     var s = String(text || '').trim();
     if (!s) return;
+    // Tag vs score: similar stroke-to-font ratios (tag slightly finer, not a large gap).
+    var outer = compact ? Math.max(2.65, px * 0.078) : Math.max(3.0, px * 0.058);
+    var mid = compact ? Math.max(1.32, px * 0.04) : Math.max(1.45, px * 0.029);
+    var hi = compact ? Math.max(0.88, px * 0.02) : Math.max(0.72, px * 0.014);
+
     ctx.save();
     ctx.textAlign = align || 'left';
     ctx.textBaseline = 'alphabetic';
     setFontTime_(weight, px);
-
-    ctx.shadowColor = 'rgba(0,0,0,0.22)';
-    ctx.shadowBlur = 10;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 2;
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.88)';
-    ctx.lineWidth = strokeW || Math.max(6, Math.round(px * 0.06));
     ctx.lineJoin = 'round';
+
+    ctx.shadowColor = 'rgba(0,0,0,0.14)';
+    ctx.shadowBlur = compact ? 5.5 : 6.5;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = compact ? 1.35 : 1.5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = outer;
     ctx.strokeText(s, x, y);
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = mid;
+    ctx.strokeText(s, x, y);
+
+    ctx.save();
+    ctx.translate(-0.55, -0.65);
+    ctx.strokeStyle = 'rgba(255,255,255,0.42)';
+    ctx.lineWidth = hi;
+    ctx.strokeText(s, x, y);
+    ctx.restore();
     ctx.restore();
 
     ctx.textAlign = align || 'left';
     ctx.textBaseline = 'alphabetic';
     setFontTime_(weight, px);
+    ctx.fillStyle = '#0725a3';
     ctx.fillText(s, x, y);
   }
 
@@ -2822,6 +2842,58 @@ async function drawShareImage_(opts) {
     ctx.fillText('vs.', W / 2 + 20, vsY);
   }
 
+  // Whole-card glass framing (all templates): rim sheen on all four edges (distinct weights),
+  // no corner blob — reads like light catching the whole glass perimeter.
+  function drawShareCardGlassFrame_(rCard) {
+    var rr = rCard;
+    ctx.save();
+    roundRectPath_(ctx, 0, 0, W, H, rr);
+    ctx.clip();
+    var bandT = Math.max(20, Math.round(H * 0.032));
+    var bandB = Math.max(14, Math.round(H * 0.024));
+    var bandL = Math.max(12, Math.round(W * 0.019));
+    var bandR = Math.max(10, Math.round(W * 0.016));
+
+    var topG = ctx.createLinearGradient(0, 0, 0, bandT);
+    topG.addColorStop(0, 'rgba(255,255,255,0.34)');
+    topG.addColorStop(0.5, 'rgba(255,255,255,0.09)');
+    topG.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = topG;
+    ctx.fillRect(0, 0, W, bandT);
+
+    var botG = ctx.createLinearGradient(0, H, 0, H - bandB);
+    botG.addColorStop(0, 'rgba(255,255,255,0.11)');
+    botG.addColorStop(0.55, 'rgba(255,255,255,0.04)');
+    botG.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = botG;
+    ctx.fillRect(0, H - bandB, W, bandB);
+
+    var leftG = ctx.createLinearGradient(0, 0, bandL, 0);
+    leftG.addColorStop(0, 'rgba(255,255,255,0.17)');
+    leftG.addColorStop(0.5, 'rgba(255,255,255,0.055)');
+    leftG.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = leftG;
+    ctx.fillRect(0, 0, bandL, H);
+
+    var rightG = ctx.createLinearGradient(W, 0, W - bandR, 0);
+    rightG.addColorStop(0, 'rgba(255,255,255,0.13)');
+    rightG.addColorStop(0.5, 'rgba(255,255,255,0.042)');
+    rightG.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = rightG;
+    ctx.fillRect(W - bandR, 0, bandR, H);
+    ctx.restore();
+    ctx.save();
+    roundRectPath_(ctx, 1, 1, W - 2, H - 2, Math.max(0, rr - 1));
+    ctx.strokeStyle = 'rgba(255,255,255,0.62)';
+    ctx.lineWidth = 2.2;
+    ctx.stroke();
+    roundRectPath_(ctx, 4, 4, W - 8, H - 8, Math.max(0, rr - 4));
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
+
   if (template === 'A1' || template === 'A2') {
     // A: align to SVG (viewBox 300x300) by ratios
     var base = 300;
@@ -2843,28 +2915,24 @@ async function drawShareImage_(opts) {
       var scoreLine = (hs || '-') + ' : ' + (as || '-');
       var yScore = yTime - 100 + 30;
 
-      ctx.fillStyle = '#0725a3';
+      var fitScoreA2 = fitTimeFont_(scoreLine, W - padA * 2, scorePx, '400');
+      var scoreLeft = W / 2 - fitScoreA2.width / 2;
+      var scoreTop = yScore - fitScoreA2.ascent;
+      var tagTextA2 = '';
+      var tagPxA2 = 0;
+      var yTagA2 = 0;
       if (tag) {
-        var tagText = String(tag).trim();
-        var fitScoreA2 = fitTimeFont_(scoreLine, W - padA * 2, scorePx, '400');
-        var scoreTop = yScore - fitScoreA2.ascent;
-        var scoreLeft = W / 2 - fitScoreA2.width / 2;
-        var tagPx = fitScoreA2.px * 0.25;
-        setFontTime_('400', tagPx);
-        var tagM = ctx.measureText(tagText);
-        var tagDes = tagM.actualBoundingBoxDescent || tagPx * 0.2;
-        var yTag = scoreTop - 10 - tagDes;
-        // user request: align tag to score box left, and move with score size
-        ctx.textAlign = 'left';
-        ctx.fillStyle = '#0725a3';
-        setFontTime_('400', tagPx);
-        ctx.fillText(tagText, scoreLeft, yTag);
+        tagTextA2 = String(tag).trim();
+        tagPxA2 = fitScoreA2.px * 0.25;
+        setFontTime_('400', tagPxA2);
+        var tagMA2 = ctx.measureText(tagTextA2);
+        var tagDesA2 = tagMA2.actualBoundingBoxDescent || tagPxA2 * 0.2;
+        yTagA2 = scoreTop - 10 - tagDesA2;
       }
-      ctx.textAlign = 'center';
-      var fitScoreA2b = fitTimeFont_(scoreLine, W - padA * 2, scorePx, '400');
-      ctx.fillStyle = '#0725a3';
-      setFontTime_('400', fitScoreA2b.px);
-      ctx.fillText(fitScoreA2b.text, W / 2, yScore);
+      if (tagTextA2) {
+        drawScoreGlassGlyph_(tagTextA2, scoreLeft, yTagA2, 'left', tagPxA2, '400', true);
+      }
+      drawScoreGlassGlyph_(fitScoreA2.text, W / 2, yScore, 'center', fitScoreA2.px, '400', false);
 
       // bottom row: date/time + location (same hierarchy as location; TASA)
       // user request: shrink to 80%
@@ -2893,6 +2961,8 @@ async function drawShareImage_(opts) {
     ctx.textBaseline = 'alphabetic';
     var teamsY = template === 'A1' ? yTeams + 70 : yTeams;
     drawTeamsA1_(home || '—', away || '—', teamsY, padA, W * 0.20);
+
+    drawShareCardGlassFrame_(radius);
   } else {
     // B: align to SVG B1/B2 (already 1080x1350)
     var padB = 90;
@@ -2905,11 +2975,71 @@ async function drawShareImage_(opts) {
     var photoBottom = photoY + photoH;
 
     // photo panel (B1/B2)
+    function drawGlassOverlay_(x, y, w, h, r) {
+      // Line-forward glass look: minimal haze, stronger edge/highlight lines.
+      ctx.save();
+      roundRectPath_(ctx, x, y, w, h, r);
+      ctx.clip();
+
+      // Ultra-light base tint only; keep photo clarity.
+      var frost = ctx.createLinearGradient(x, y, x, y + h);
+      frost.addColorStop(0, 'rgba(255,255,255,0.04)');
+      frost.addColorStop(0.45, 'rgba(255,255,255,0.015)');
+      frost.addColorStop(1, 'rgba(255,255,255,0.03)');
+      ctx.fillStyle = frost;
+      ctx.fillRect(x, y, w, h);
+
+      // Narrow top sheen line band.
+      var topSheen = ctx.createLinearGradient(x, y, x, y + h * 0.09);
+      topSheen.addColorStop(0, 'rgba(255,255,255,0.42)');
+      topSheen.addColorStop(0.5, 'rgba(255,255,255,0.12)');
+      topSheen.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = topSheen;
+      ctx.fillRect(x, y, w, h * 0.09);
+
+      // Small corner highlight; tight and controlled.
+      var glow = ctx.createRadialGradient(
+        x + w * 0.14,
+        y + h * 0.1,
+        0,
+        x + w * 0.14,
+        y + h * 0.1,
+        Math.max(w, h) * 0.34
+      );
+      glow.addColorStop(0, 'rgba(255,255,255,0.16)');
+      glow.addColorStop(0.55, 'rgba(255,255,255,0.03)');
+      glow.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(x, y, w, h);
+
+      // Keep only a tiny lower shade for depth cue.
+      var shade = ctx.createLinearGradient(x, y, x, y + h);
+      shade.addColorStop(0, 'rgba(255,255,255,0)');
+      shade.addColorStop(0.78, 'rgba(255,255,255,0)');
+      shade.addColorStop(1, 'rgba(0,0,0,0.035)');
+      ctx.fillStyle = shade;
+      ctx.fillRect(x, y, w, h);
+      ctx.restore();
+
+      // Glass edge stroke (outer + inner) to emphasize line feel.
+      ctx.save();
+      roundRectPath_(ctx, x + 0.5, y + 0.5, w - 1, h - 1, Math.max(0, r - 0.5));
+      ctx.strokeStyle = 'rgba(255,255,255,0.74)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      roundRectPath_(ctx, x + 2, y + 2, w - 4, h - 4, Math.max(0, r - 2));
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
+      ctx.restore();
+    }
+
     ctx.save();
     roundRectPath_(ctx, photoX, photoY, photoW, photoH, photoR);
     ctx.clip();
     if (opts.photoImg) {
       coverDrawImage_(ctx, opts.photoImg, photoX, photoY, photoW, photoH);
+      drawGlassOverlay_(photoX, photoY, photoW, photoH, photoR);
     } else {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(photoX, photoY, photoW, photoH);
@@ -2933,29 +3063,24 @@ async function drawShareImage_(opts) {
       var cxScoreB2 = 760;
       var maxWScoreB2 = 520;
 
-      ctx.fillStyle = '#0725a3';
-      ctx.textAlign = 'center';
-
       var fitScoreB2 = fitTimeFont_(scoreLineB2, maxWScoreB2, scorePxB2, '400');
       var scoreTopB2 = yScoreB2 - fitScoreB2.ascent;
       var scoreLeftB2 = cxScoreB2 - fitScoreB2.width / 2;
-
+      var tagTextB2 = '';
+      var tagPxB2 = 0;
+      var yTagB2 = 0;
       if (tag) {
-        var tagTextB2 = String(tag).trim();
-        var tagPxB2 = fitScoreB2.px * 0.25;
+        tagTextB2 = String(tag).trim();
+        tagPxB2 = fitScoreB2.px * 0.25;
         setFontTime_('400', tagPxB2);
         var mTagB2 = ctx.measureText(tagTextB2);
         var tagDesB2 = mTagB2.actualBoundingBoxDescent || tagPxB2 * 0.2;
-        // tighter: tag bottom is just above score top
-        var yTagB2 = scoreTopB2 - 2 - tagDesB2;
-        ctx.textAlign = 'left';
-        ctx.fillStyle = '#0725a3';
-        drawTimeTextHalo_(tagTextB2, scoreLeftB2, yTagB2, 'left', tagPxB2, '400', 6);
+        yTagB2 = scoreTopB2 - 2 - tagDesB2;
       }
-
-      ctx.textAlign = 'center';
-      ctx.fillStyle = '#0725a3';
-      drawTimeTextHalo_(fitScoreB2.text, cxScoreB2, yScoreB2, 'center', fitScoreB2.px, '400', 12);
+      if (tagTextB2) {
+        drawScoreGlassGlyph_(tagTextB2, scoreLeftB2, yTagB2, 'left', tagPxB2, '400', true);
+      }
+      drawScoreGlassGlyph_(fitScoreB2.text, cxScoreB2, yScoreB2, 'center', fitScoreB2.px, '400', false);
     }
 
     // location line
@@ -3096,6 +3221,8 @@ async function drawShareImage_(opts) {
       // user request: shrink to 80% (match B1 date size/weight system)
       drawDateLocationCentered_(dt.date || '', venueText || '', 1121, 66 * 0.8);
     }
+
+    drawShareCardGlassFrame_(radius);
   }
 
   // footer mark
