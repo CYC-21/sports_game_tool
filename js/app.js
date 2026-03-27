@@ -3111,22 +3111,53 @@ async function drawShareImage_(opts) {
 function downloadCanvasPng_(canvas, filename) {
   return new Promise(function (resolve) {
     canvas.toBlob(
-      function (blob) {
+      async function (blob) {
         if (!blob) {
           resolve(false);
           return;
         }
+        var fname = filename || 'share.png';
+
+        // iOS Safari: "download" is unreliable; prefer Share Sheet when available.
+        try {
+          var file = new File([blob], fname, { type: 'image/png' });
+          if (
+            navigator &&
+            navigator.canShare &&
+            navigator.share &&
+            navigator.canShare({ files: [file] })
+          ) {
+            await navigator.share({ files: [file], title: fname });
+            resolve(true);
+            return;
+          }
+        } catch (eShare) {
+          /* fallback */
+        }
+
+        // Fallback: try normal download; if blocked, open image in new tab.
         var url = URL.createObjectURL(blob);
-        var a = document.createElement('a');
-        a.href = url;
-        a.download = filename || 'share.png';
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(function () {
-          URL.revokeObjectURL(url);
+        try {
+          var a = document.createElement('a');
+          a.href = url;
+          a.download = fname;
+          a.rel = 'noopener';
+          document.body.appendChild(a);
+          a.click();
           a.remove();
-        }, 1500);
-        resolve(true);
+          resolve(true);
+        } catch (eDl) {
+          try {
+            window.open(url, '_blank', 'noopener,noreferrer');
+            resolve(true);
+          } catch (eOpen) {
+            resolve(false);
+          }
+        } finally {
+          setTimeout(function () {
+            URL.revokeObjectURL(url);
+          }, 4000);
+        }
       },
       'image/png',
       1
